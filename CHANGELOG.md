@@ -3,7 +3,7 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
-## [1.2.0] - unreleased
+## [1.2.0] - 2026-11-20
 
 ### Added
 - **Gotify** notifications: JSON with title, message and priority (8 for rejected updates),
