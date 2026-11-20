@@ -1025,11 +1025,44 @@ step() {
     say "--- Step $1 of 6: $2"
 }
 
-# Interfaces that have a stable global IPv6 or IPv4, with the address, for the list in step 5.
+# Network interfaces worth offering in step 5: no loopback and no virtual ones (Docker, bridges,
+# libvirt). Prints "name<TAB>state".
 list_ifaces() {
-    ip -o addr show scope global 2>/dev/null \
-        | awk '$0 !~ /temporary/ && $0 !~ /deprecated/ { a = $4; sub(/\/.*/, "", a); print $2 "\t" a }' \
-        | sort -u
+    ip -br link 2>/dev/null | awk '
+        { n = $1; sub(/@.*/, "", n) }
+        n == "lo" || n ~ /^(docker|br-|veth|virbr|vnet|cni|flannel|cali|tap)/ { next }
+        { print n "\t" $2 }'
+}
+
+# Step 5 discoverer: one numbered line per interface with the IPv6 that would really be published
+# (same choice as get_ipv6) and its IPv4. Sets IFACE_LIST (names) and IFACE_RECOMMENDED.
+show_iface_table() {
+    local default_if name state v6 v4 mark i=0 first_v6=""
+    default_if=$(detect_iface)
+    IFACE_LIST=()
+    IFACE_RECOMMENDED=""
+    printf '  %-3s %-12s %-6s %-40s %s\n' "#" "Interface" "State" "IPv6 that would be published" "IPv4"
+    while IFS=$'\t' read -r name state; do
+        [[ -n "$name" ]] || continue
+        i=$((i + 1))
+        IFACE_LIST+=("$name")
+        v6=$(IFACE="$name" get_ipv6 2>/dev/null)
+        v4=$(IFACE="$name" ipv4_from_interface | head -n 1)
+        mark=""
+        [[ "$name" == "$default_if" ]] && mark="default route"
+        if [[ -n "$v6" && "$name" == "$default_if" ]]; then
+            IFACE_RECOMMENDED="$name"
+        fi
+        [[ -n "$v6" && -z "$first_v6" ]] && first_v6="$name"
+        printf '  %-3s %-12s %-6s %-40s %-15s %s\n' "$i)" "$name" "$state" \
+            "${v6:-none (no stable public IPv6)}" "${v4:--}" "$mark"
+    done < <(list_ifaces)
+    [[ -n "$IFACE_RECOMMENDED" ]] || IFACE_RECOMMENDED="${first_v6:-$default_if}"
+    if [[ -z "$first_v6" ]]; then
+        say "  Note: no interface has a stable public IPv6, so only the A record (IPv4) can be kept"
+        say "  up to date, unless one appears later."
+    fi
+    [[ -n "$IFACE_RECOMMENDED" ]] && say "  Recommended: $IFACE_RECOMMENDED"
 }
 
 # Writes the config atomically. Keys not asked in this run but present before are kept.
@@ -1170,19 +1203,26 @@ setup() {
 
     # ---- 5 network
     step 5 "Network"
-    say "Interfaces with global addresses:"
-    list_ifaces | sed 's/^/  /'
-    local det
-    det="${OLD[IFACE]:-$(detect_iface)}"
-    say "The IPv6 address is read from this interface (and the IPv4 too, if it has a public one)."
+    say "The IPv6 address is read from the interface you pick here (and the IPv4 too, if it has a"
+    say "public one). Temporary privacy addresses and local-only addresses are never published."
+    RECORDS="A+AAAA" IPV4_SOURCE=dns UPNP_URL="${OLD[UPNP_URL]:-}"
+    IPV6_SUFFIX="${OLD[IPV6_SUFFIX]:-}" IPV6_SUFFIX_X=""
+    if [[ -n "$IPV6_SUFFIX" ]]; then
+        IPV6_SUFFIX_X=$(expand_ipv6 "$IPV6_SUFFIX")
+        IPV6_SUFFIX_X="${IPV6_SUFFIX_X:20}"
+    fi
+    show_iface_table
+    local det="${OLD[IFACE]:-$IFACE_RECOMMENDED}"
     while true; do
-        ask "Network interface" "$det"
+        ask "Network interface (number or name)" "$det"
+        if [[ "$REPLY_VALUE" =~ ^[0-9]+$ ]] && (( REPLY_VALUE >= 1 && REPLY_VALUE <= ${#IFACE_LIST[@]} )); then
+            REPLY_VALUE="${IFACE_LIST[REPLY_VALUE - 1]}"
+        fi
         [[ "$REPLY_VALUE" =~ ^[A-Za-z0-9_.:@-]{1,15}$ ]] && ip link show dev "$REPLY_VALUE" >/dev/null 2>&1 && break
-        say "No interface named \"$REPLY_VALUE\". Pick one from the list above."
+        say "No interface named \"$REPLY_VALUE\". Type a number or a name from the list above."
     done
     set_new IFACE "$REPLY_VALUE"
     IFACE="$REPLY_VALUE"
-    RECORDS="A+AAAA" IPV4_SOURCE=dns UPNP_URL="${OLD[UPNP_URL]:-}" IPV6_SUFFIX="" IPV6_SUFFIX_X=""
 
     local v6 v4i v4u v4d sug_src="" sug_rec="A+AAAA" note=""
     v6=$(get_ipv6)

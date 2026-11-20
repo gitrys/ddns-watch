@@ -244,9 +244,15 @@ cat > "$SRC/ip" << 'EOF'
 #!/bin/bash
 # -6 addr: contents of $STUB_IP6_FILE. monitor: two events; before the second one the address
 # file is replaced by $STUB_IP6_FILE.next (the first event changes nothing we publish).
+# -br link: $STUB_LINKS. -6 route: $STUB_ROUTE6. -6 addr of a device: $STUB_IP6_FILE.<dev> if it
+# exists, else $STUB_IP6_FILE.
 case "$*" in
+    "-br link"*) printf '%b' "${STUB_LINKS:-}" ;;
+    "-6 route show default"*) printf '%b' "${STUB_ROUTE6:-}" ;;
     "-4 addr show dev"*) printf '%b' "${STUB_IP4:-}" ;;
-    "-6 addr show dev"*) [[ -n "${STUB_IP6_FILE:-}" ]] && cat "$STUB_IP6_FILE" ;;
+    "-6 addr show dev"*)
+        if [[ -f "${STUB_IP6_FILE:-}.$5" ]]; then cat "$STUB_IP6_FILE.$5"
+        elif [[ -f "${STUB_IP6_FILE:-}" ]]; then cat "$STUB_IP6_FILE"; fi ;;
     *monitor*)
         echo "event 1"; sleep 1
         [[ -f "${STUB_IP6_FILE:-}.next" ]] && cp "$STUB_IP6_FILE.next" "$STUB_IP6_FILE"
@@ -429,6 +435,30 @@ run_setup "" "" "" "" "" "" "" ""
 expect "setup: re-run keeps answers (Enter everywhere)" has "Done."
 expect "  ... router with CGNAT address -> IPv6 only suggested" conf_has RECORDS=AAAA
 expect "  ... settings not asked are kept" eval 'conf_has NETCUP_ZONE=example.com && conf_has "UPNP_URL=$MOCK/upnp/control"'
+
+echo "== setup: interface discoverer"
+LINKS='lo               UNKNOWN 00:00:00:00:00:00\neth0             UP      52:54:00:12:34:56\ndocker0          DOWN    02:42:ac:11:00:01\nveth12ab@if3     UP      aa:bb:cc:dd:ee:ff\nbr-5f2a          UP      02:42:00:00:00:01\nwlan0            DOWN    52:54:00:65:43:21\n'
+ROUTE6='default via fe80::1 dev eth0 proto ra metric 100\n'
+mock_reset; new_case netcup; rm -f "$D/etc/config"
+printf '%s\n' "$V6_ADDRS" > "$D/ip6.eth0"
+printf '%s\n' '    inet6 2001:db8:1::aaaa:1234/64 scope global temporary dynamic' > "$D/ip6.wlan0"
+DDNS_TEST_IPV6='' STUB_LINKS="$LINKS" STUB_ROUTE6="$ROUTE6" STUB_IP6_FILE="$D/ip6" \
+    run_setup netcup example.com RESTTOKEN "" "" "" "" "" ""
+[[ -n "${SHOW_SETUP:-}" ]] && sed -n '/Step 5 of 6/,/Network interface/p' <<< "$OUT"
+expect "discoverer: table shows the IPv6 that would be published" has "2001:db8:1::67c:16ff:fedf:a200"
+expect "  ... marks the default route" eval '[[ "$(grep "eth0" <<< "$OUT" | head -n 1)" == *"default route"* ]]'
+expect "  ... adapter without stable IPv6 says so" eval '[[ "$(grep " wlan0 " <<< "$OUT")" == *"no stable public IPv6"* ]]'
+expect "  ... hides lo, docker, veth and bridges" eval '! grep -Eq "^  [0-9]+\) +(lo|docker0|veth12ab|br-5f2a) " <<< "$OUT"'
+expect "  ... recommends eth0, Enter takes it" eval '[[ "$OUT" == *"Recommended: eth0"* ]] && conf_has IFACE=eth0'
+mock_reset; new_case netcup; rm -f "$D/etc/config"
+printf '%s\n' "$V6_ADDRS" > "$D/ip6.eth0"
+DDNS_TEST_IPV6='' STUB_LINKS="$LINKS" STUB_ROUTE6="$ROUTE6" STUB_IP6_FILE="$D/ip6" \
+    run_setup netcup example.com RESTTOKEN 2 y "" "" "" "" ""
+expect "discoverer: choose by number (2 = wlan0)" conf_has IFACE=wlan0
+mock_reset; new_case netcup; rm -f "$D/etc/config"
+DDNS_TEST_IPV6='' STUB_LINKS="$LINKS" STUB_ROUTE6="$ROUTE6" STUB_IP6_FILE="$D/none" \
+    run_setup netcup example.com RESTTOKEN "" n "" "" "" "" ""
+expect "discoverer: warns when no interface has a public IPv6" has "no interface has a stable public IPv6"
 
 echo "== status / uninstall"
 mock_reset; new_case netcup
