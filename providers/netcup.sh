@@ -42,10 +42,8 @@ provider_config() {
         err "NETCUP_CUSTOMER in $CONFIG_FILE must be digits only"
         return 1
     fi
-    if [[ ! "$NETCUP_TTL" =~ ^[0-9]{2,6}$ ]]; then
-        err "NETCUP_TTL=$NETCUP_TTL in $CONFIG_FILE must be a number of seconds"
-        return 1
-    fi
+    # (also turns "0300" into 300: a leading zero would be invalid JSON for the API)
+    number_setting NETCUP_TTL 60 86400 "seconds" || return 1
 }
 
 provider_secrets() {
@@ -414,7 +412,10 @@ netcup_select_api() {
             fi
             note="REST API: domain is on netcup's legacy DNS (isDnsManaged=false)"
         else
-            note="REST API: $REST_ERR"
+            # Only "the REST API confirms the domain is not managed there" may switch to the legacy
+            # API. A rejected key, a timeout or a server error is reported as what it is.
+            NETCUP_SELECT_ERR="REST API: $REST_ERR"
+            return 1
         fi
     fi
     if netcup_legacy_complete; then

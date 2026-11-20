@@ -30,6 +30,10 @@ welcome too.
 - **Signed releases with an own key** (minisign) in addition to the GitHub build attestation,
   so a release can be checked without the GitHub CLI.
 - **Distribution packages** (`.deb`), if the one-line installer is not enough.
+- **Minute-exact retries** independent of the check interval (today a retry runs at the next
+  check: every minute with `upnp`, every 5 minutes otherwise). Only if it turns out to matter.
+- **Transactional updates with rollback** (versioned install folders). Today `update` verifies
+  that the service runs and the installer can always be run again.
 
 ## Not planned
 

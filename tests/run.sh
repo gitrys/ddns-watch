@@ -681,6 +681,73 @@ expect "upgrade: service not running afterwards -> error, rc 1" eval '[[ "$RC" =
 inst --upgrade --yes
 expect "upgrade: running service is confirmed" has "ddns-watch.service is running"
 
+echo "== second review fixes"
+# B: the login test sees settings that the setup does not ask again (here NETCUP_API=rest)
+mock_reset legacy; new_case netcup
+sed -i -e 's/^NETCUP_API.*/NETCUP_API=rest/' -e '/^NETCUP_CUSTOMER=/d' "$D/etc/config"
+run_store set-secret netcup-api-key <<< 'RESTTOKEN'
+run_setup "" "" "" "" "" "" "" ""
+expect "B: setup login test uses the merged config (NETCUP_API=rest kept)" eval '[[ "$OUT" == *"Login OK"* && "$OUT" != *"did not pass"* ]]'
+# C: timer drop-in replaces the interval list and the timer is restarted
+mock_reset; new_case netcup; rm -f "$D/etc/config"
+run_setup netcup example.com RESTTOKEN lo "" "" "" ""
+expect "C: timer drop-in clears the list first" eval 'grep -qx "OnUnitActiveSec=" "$D/units/ddns-watch-ipv4.timer.d/interval.conf" && grep -qx "OnBootSec=2min" "$D/units/ddns-watch-ipv4.timer.d/interval.conf"'
+expect "  ... and the timer is restarted" grep -q "restart ddns-watch-ipv4.timer" "$D/systemctl.log"
+# F: no address at all -> temporary error, notified later, retried at once when an address is back
+mock_reset; new_case netcup
+echo "NOTIFY_URL=$MOCK/notify" >> "$D/etc/config"
+DDNS_TEST_IPV4=none DDNS_TEST_IPV6=none run
+expect "F: no usable address -> temporary error recorded" eval 'grep -q "^CLASS=temporary" "$D/state/failure" && grep -q "no usable" "$D/state/failure"'
+fail_set SINCE "$(( $(date +%s) - 3600 ))"
+DDNS_TEST_IPV4=none DDNS_TEST_IPV6=none run
+expect "  ... long outage -> notified" [ "$(mock_state '[.notify[] | select(.title=="DNS update failing")] | length')" = 1 ]
+run
+expect "  ... address back -> updated at once, no waiting" eval '[[ "$OUT" == *"good netcup-rest"* && "$OUT" != *"waiting to retry"* && ! -e "$D/state/failure" ]]'
+# H: leading zeros
+mock_reset; new_case netcup
+printf 'NOTIFY_URL=%s/notify\nNOTIFY_AFTER=08\nNETCUP_TTL=0300\n' "$MOCK" >> "$D/etc/config"
+run
+expect "H: NETCUP_TTL=0300 works (sent as 300)" has "good netcup-rest"
+DDNS_TEST_IPV4=none DDNS_TEST_IPV6=none run
+fail_set SINCE "$(( $(date +%s) - 3600 ))"
+DDNS_TEST_IPV4=none DDNS_TEST_IPV6=none run
+expect "  ... NOTIFY_AFTER=08 does not break the arithmetic" eval '[[ "$OUT" != *"value too great"* ]] && [ "$(mock_state "[.notify[]] | length")" = 1 ]'
+new_case netcup; echo 'NETCUP_TTL=5' >> "$D/etc/config"
+run
+expect "  ... out-of-range values are rejected" has "between 60 and 86400"
+# J: state cannot be saved
+mock_reset; new_case netcup
+run    # creates the lock file and a first state
+chmod 500 "$D/state"   # lock file still writable, but no new file can be created
+run --force
+chmod 700 "$D/state"
+expect "J: DNS updated but state not saved -> error, rc 1" eval '[[ "$RC" == 1 && "$OUT" == *"could not be saved"* && "$OUT" == *"netcup-rest @.example.com"* ]]'
+# I: a rejected REST key is reported, no silent switch to the legacy API
+mock_reset; new_case netcup
+printf 'WRONG' > "$D/creds/netcup-api-key"
+run --force
+expect "I: wrong REST key -> REST error, legacy API not tried" eval '[[ "$RC" == 1 && "$OUT" == *"REST API"* && "$OUT" != *"using legacy API"* ]] && ! mock_state ".log[]" | grep -q legacy'
+# A: several interface addresses with a DNS fallback configured
+mock_reset; new_case netcup
+printf 'IPV4_SOURCE=interface\nIPV4_FALLBACK=dns\n' >> "$D/etc/config"
+STUB_CF=81.2.69.199 STUB_IP4='    inet 81.2.69.142/32 scope global eth0\n    inet 81.2.69.143/32 scope global eth0\n' run_src
+expect "A: first public interface address used, not the DNS fallback" zone_has @ A '["81.2.69.142"]'
+mock_reset; new_case netcup
+printf 'IPV4_SOURCE=interface\nIPV4_FALLBACK=dns\n' >> "$D/etc/config"
+STUB_CF=81.2.69.199 STUB_IP4='    inet 192.168.1.50/24 scope global eth0\n' run_src
+expect "  ... only a private address on the interface -> DNS fallback used" zone_has @ A '["81.2.69.199"]'
+# G: secret not handed to the service
+mock_reset; new_case netcup
+run_store set-secret netcup-api-key <<< 'RESTTOKEN'
+run_store set-secret strato-password <<< 'p"a\ss'
+sed -i 's/^PROVIDER=.*/PROVIDER=strato/' "$D/etc/config"
+run_store status
+expect "G: status says the new provider's secret is not given to the service" has "NOT given to the service"
+mkdir -p "$D/svc-creds"
+OUT=$(CREDENTIALS_DIRECTORY="$D/svc-creds" DDNS_CONFIG_DIR="$D/etc" DDNS_STATE_DIR="$D/state" DDNS_RUNTIME_DIR="$D/run" \
+    timeout 30 "$ROOT/ddns-watch.sh" run 2>&1); RC=$?
+expect "  ... and the service explains what to do" has "the service was not given this secret"
+
 echo "== plugin interface"
 plugin_lint() ( # plugin_lint NAME: source the core, load the plugin, check the rules from CONTRIBUTING.md
     # shellcheck source=/dev/null

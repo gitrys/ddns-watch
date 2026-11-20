@@ -3,6 +3,33 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - unreleased
+
+Fixes from a second external code review.
+
+### Fixed
+- Setup: the login test now uses exactly the config that will be saved, including settings not
+  asked again (e.g. `NETCUP_ZONE`, `NETCUP_API`). Before, a re-run could fail the test although the
+  saved config was right.
+- A custom `IPV4_INTERVAL` above 5 minutes had no effect (timer settings are lists; the drop-in
+  added a second interval). The drop-in now replaces the list, and the timer is restarted.
+- "No usable IPv4 and IPv6" is now a temporary error: counted, notified after `NOTIFY_AFTER`, and
+  retried at once when an address is back.
+- Numbers with a leading zero (`NOTIFY_AFTER=08`, `NETCUP_TTL=0300`) broke the arithmetic or the
+  JSON; settings are now checked for their range and stored as plain decimals.
+- If the state cannot be saved after a successful DNS update, this is reported as an error
+  (no heartbeat, non-zero exit) instead of a silent success.
+- netcup `NETCUP_API=auto` falls back to the legacy API only if the REST API says the domain is on
+  netcup's old DNS, no longer on a rejected key, timeout or server error.
+- `IPV4_SOURCE=interface` with several addresses and `IPV4_FALLBACK=dns`: the first public
+  address on the interface is used; DNS is only asked when there is none.
+- A secret that is stored but not handed to the service (provider switched in the config by hand)
+  gives a clear message ("run sudo ddns-watch setup"), also in `sudo ddns-watch status`.
+
+### Changed
+- README: retries happen at the next check after the retry time (not minute-exact); provider
+  switch needs the setup; new section "Known limitations".
+
 ## [1.4.0] - 2026-11-20
 
 Fixes from an external code review.

@@ -93,8 +93,13 @@ Only one hostname is updated. Make other names `CNAME`s to it, e.g. `www.example
 The config is plain `KEY=value` and is never executed. It is read on every run, so changes apply
 without a restart: a change of hostname, records or provider settings (zone, TTL ...) triggers an
 update even if the IPs are the same, and the watcher restarts itself within a minute when
-`IFACE`, `IPV4_SOURCE`, `RECORDS` or `IPV6_SUFFIX` change. After adding a secret by hand, run
-`sudo ddns-watch set-secret ...` (or the setup) so the service gets it.
+`IFACE`, `IPV4_SOURCE`, `RECORDS` or `IPV6_SUFFIX` change.
+
+Two exceptions need `sudo ddns-watch setup` (or `sudo ddns-watch set-secret NAME`): **switching
+the provider** and **adding a secret by hand**. The service only receives the secrets of the
+provider that was active at the last setup / set-secret; `sudo ddns-watch status` shows
+"stored, but NOT given to the service" when that is out of date. A changed `IPV4_INTERVAL` also
+takes effect with the next setup run.
 
 ## Providers
 
@@ -128,8 +133,10 @@ record that is no longer wanted by hand at your provider.
 
 - A **permanent** error (key rejected, unknown hostname) stops further tries until you change the
   config or the secret, and notifies at once.
-- A **temporary** error (provider down, no network) is retried after 1, 2, 5, then every 10
-  minutes; notification after `NOTIFY_AFTER` minutes (default 15), and again when it works.
+- A **temporary** error (provider down, no usable address) is retried. A retry is allowed after
+  1, 2, 5, then every 10 minutes; it runs at the next check after that: the IPv4 timer (every
+  minute with `upnp`, every 5 minutes otherwise) or an address change. Notification after
+  `NOTIFY_AFTER` minutes (default 15), and again when it works.
 - Once a day the current addresses are sent even without a change (fixes records changed by hand).
 - **Notification** (`NOTIFY_URL`, optional): a message to your phone when updates keep failing,
   via **ntfy** (no account needed), **Gotify**, **Discord** or **Slack** / Mattermost.
@@ -190,6 +197,23 @@ Keep your API key in a password manager, or create a new one at your provider.
 Create the records at the new provider first (other names as CNAMEs). After the registry has
 switched to the new provider's name servers, run `sudo ddns-watch setup` and choose the new
 provider. Settings of the old provider stay in the config and are ignored.
+
+## Known limitations
+
+Deliberately not handled, because they are rare or the fix would cost more than it helps:
+
+- **Heartbeat and dual stack:** the heartbeat only shows that ddns-watch runs and reaches the
+  internet. If only the IPv6 is lost while IPv4 works, the heartbeat stays green; the AAAA record is
+  then kept as it was (see "Records are only set, never deleted") and the log says why.
+- **Several public IPv4 on the interface** with `IPV4_SOURCE=interface`: the first public one is
+  used. `IPV4_FALLBACK=dns` is only asked when none of them is public.
+- **netcup records marked immutable** (only NS/SOA in practice) are not changed or deleted. If the
+  A/AAAA record of your hostname were immutable, ddns-watch could not replace it.
+- **No rollback for an interrupted update.** `update` checks that the service runs afterwards and
+  says so loudly if not. If the program itself is broken, run the installer again:
+  `curl -fsSL https://github.com/gitrys/ddns-watch/releases/latest/download/install.sh | sudo bash`
+  (your config and secrets are kept).
+- **Retries are not minute-exact** (see above): they happen at the next check.
 
 ## Security
 

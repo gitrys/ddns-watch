@@ -90,6 +90,17 @@ is_root() { [[ "$EUID" -eq 0 || -n "${DDNS_TEST_ROOT:-}" ]]; }
 
 # ---------------------------------------------------------------- helpers for plugins
 
+# number_setting VAR MIN MAX UNIT: checks that VAR holds a whole number in MIN..MAX and stores it
+# as plain decimal ("08" -> 8; bash would read a leading 0 as octal and fail on 08/09).
+number_setting() {
+    local v="${!1}"
+    if [[ ! "$v" =~ ^[0-9]{1,7}$ ]] || (( 10#$v < $2 || 10#$v > $3 )); then
+        err "$1=$v in $CONFIG_FILE must be a number of $4 between $2 and $3"
+        return 1
+    fi
+    printf -v "$1" '%d' "$((10#$v))"
+}
+
 # cfg KEY [DEFAULT] -> the setting from the config file, or DEFAULT.
 cfg() {
     local v="${CFG[$1]:-}"
@@ -117,7 +128,11 @@ read_secret() {
 }
 
 secrets_hint() {
-    if [[ -n "$SECRETS_DIR" ]]; then
+    if [[ -n "${CREDENTIALS_DIRECTORY:-}" ]]; then
+        # Running as the service: systemd hands over only the secrets listed in the drop-in, which
+        # setup / set-secret write for the provider active at that time.
+        printf 'the service was not given this secret. After switching PROVIDER in the config, run: sudo ddns-watch setup (or: sudo ddns-watch set-secret %s)' "${1:-NAME}"
+    elif [[ -n "$SECRETS_DIR" ]]; then
         printf 'looked in %s' "$SECRETS_DIR"
     elif ! is_root; then
         printf 'run as root to read the encrypted secrets, e.g. sudo ddns-watch check'
@@ -355,14 +370,10 @@ load_config() {
         *) err "NOTIFY_TYPE=$NOTIFY_TYPE in $CONFIG_FILE must be auto, ntfy, gotify, discord or slack"; return 1 ;;
     esac
     NOTIFY_AFTER="${CFG[NOTIFY_AFTER]:-15}"
-    if [[ ! "$NOTIFY_AFTER" =~ ^[0-9]{1,5}$ ]]; then
-        err "NOTIFY_AFTER=$NOTIFY_AFTER in $CONFIG_FILE must be minutes (a number)"
-        return 1
-    fi
+    number_setting NOTIFY_AFTER 0 99999 "minutes" || return 1
     IPV4_INTERVAL="${CFG[IPV4_INTERVAL]:-}"
-    if [[ -n "$IPV4_INTERVAL" && ! "$IPV4_INTERVAL" =~ ^[0-9]{2,5}$ ]]; then
-        err "IPV4_INTERVAL=$IPV4_INTERVAL in $CONFIG_FILE must be seconds (at least 10)"
-        return 1
+    if [[ -n "$IPV4_INTERVAL" ]]; then
+        number_setting IPV4_INTERVAL 10 86400 "seconds" || return 1
     fi
     IPV6_SUFFIX="${CFG[IPV6_SUFFIX]:-}"
     IPV6_SUFFIX_X=""
@@ -436,13 +447,20 @@ dns_fingerprint() {
     } | sha256sum | cut -c1-16
 }
 
+# write_state IPV4 IPV6 [CALLED]: returns 1 (with a message) if the state could not be saved.
 write_state() {
     local tmp
-    tmp=$(mktemp "$STATE_DIR/last.XXXXXX") || { warn "cannot write $STATE"; return 0; }
-    printf 'IPV4=%s\nIPV6=%s\nPROVIDER=%s\nUPDATED=%s\nCALLED=%s\nAPPLIED=%s\n' \
-        "$1" "$2" "$PROVIDER" "$(date -Iseconds)" "${3:-$(date +%s)}" "$(dns_fingerprint)" > "$tmp"
-    chmod 600 "$tmp"
-    mv "$tmp" "$STATE"
+    if ! tmp=$(mktemp "$STATE_DIR/last.XXXXXX" 2>/dev/null); then
+        err "cannot save the state in $STATE_DIR"
+        return 1
+    fi
+    if ! printf 'IPV4=%s\nIPV6=%s\nPROVIDER=%s\nUPDATED=%s\nCALLED=%s\nAPPLIED=%s\n' \
+            "$1" "$2" "$PROVIDER" "$(date -Iseconds)" "${3:-$(date +%s)}" "$(dns_fingerprint)" > "$tmp" \
+        || ! chmod 600 "$tmp" || ! mv "$tmp" "$STATE"; then
+        rm -f "$tmp"
+        err "cannot save the state in $STATE"
+        return 1
+    fi
 }
 
 # ---------------------------------------------------------------- IP addresses
@@ -524,22 +542,25 @@ get_ipv4() {
         [[ "$DDNS_TEST_IPV4" == "none" ]] || printf '%s\n' "$DDNS_TEST_IPV4"
         return 0
     fi
-    local ip src="$IPV4_SOURCE" c
+    local ip src="$IPV4_SOURCE" c found=""
     ip=$("ipv4_from_$src")
+    if [[ "$src" == interface ]]; then
+        # The interface may have several addresses: take the first public one.
+        for c in $ip; do
+            if is_ipv4 "$c" && ! is_nonpublic_ipv4 "$c"; then
+                found="$c"
+                break
+            fi
+        done
+        if [[ -z "$found" && -n "$ip" && "$IPV4_FALLBACK" != dns ]]; then
+            warn "no public IPv4 on $IFACE (only: $(tr '\n' ' ' <<< "$ip")); not publishing an A record"
+        fi
+        ip="$found"
+    fi
+    # Fallback only when the chosen source gave no usable address at all.
     if ! is_ipv4 "$ip" && [[ "$IPV4_FALLBACK" == dns && "$src" != dns ]]; then
         src=dns
         ip=$(ipv4_from_dns)
-    fi
-    if [[ "$IPV4_SOURCE" == interface ]]; then
-        # Several addresses on the interface: take the first public one.
-        for c in $ip; do
-            if is_ipv4 "$c" && ! is_nonpublic_ipv4 "$c"; then
-                printf '%s\n' "$c"
-                return 0
-            fi
-        done
-        [[ -n "$ip" ]] && warn "no public IPv4 on $IFACE (only: $(echo $ip)); not publishing an A record"
-        return 0
     fi
     is_ipv4 "$ip" || return 0
     if is_nonpublic_ipv4 "$ip"; then
@@ -780,7 +801,15 @@ _update_once_locked() {
     ipv6=$(get_ipv6 || true)
 
     if [[ -z "$ipv4" && -z "$ipv6" ]]; then
-        err "no IPv4 and no IPv6; skipping update"
+        err "no usable IPv4 and no usable IPv6; skipping update (network down?)"
+        # Count it like a temporary error, so a long outage is notified (if a message can still
+        # get out). No retry delay: as soon as an address is back, the next run updates.
+        # A pending permanent error is kept as it is.
+        load_failure
+        if [[ "$FAIL_CLASS" != permanent ]]; then
+            record_failure temporary "no usable IPv4 or IPv6 address (network down?)" \
+                "$(date +%s)" "$(config_fingerprint)" nowait
+        fi
         return 1
     fi
     [[ -n "$ipv4" || "$RECORDS" == AAAA ]] || warn "no public IPv4 (source: $IPV4_SOURCE); continuing with IPv6 only"
@@ -861,8 +890,13 @@ _update_once_locked() {
     PROVIDER_ERROR_CLASS="temporary"
     if provider_update "$ipv4" "$ipv6"; then
         say "$PROVIDER: $PROVIDER_RESPONSE"
-        write_state "$ipv4" "$ipv6" "$now"
         clear_failure
+        if ! write_state "$ipv4" "$ipv6" "$now"; then
+            # The DNS record is right, but without the state the next run calls the provider
+            # again. Not a full success: no heartbeat, non-zero exit (visible in systemctl).
+            err "DNS was updated, but the local state could not be saved (disk full? permissions?)"
+            return 1
+        fi
         heartbeat
         return 0
     fi
@@ -920,8 +954,9 @@ config_fingerprint() {
     } | sha256sum | cut -c1-16
 }
 
-# record_failure CLASS MESSAGE NOW FINGERPRINT: remembers the error, schedules the next try
-# (1, 2, 5, then every 10 min) and notifies (permanent: at once; temporary: after NOTIFY_AFTER).
+# record_failure CLASS MESSAGE NOW FINGERPRINT [nowait]: remembers the error, sets the earliest time
+# for the next try (1, 2, 5, then every 10 min; "nowait": at once) and notifies (permanent: at once;
+# temporary: after NOTIFY_AFTER). The try itself happens at the next run (timer or address event).
 record_failure() {
     local delays=(60 120 300 600)
     load_failure
@@ -933,6 +968,7 @@ record_failure() {
     local i=$((FAIL_COUNT - 1))
     (( i < ${#delays[@]} )) || i=$((${#delays[@]} - 1))
     FAIL_NEXT=$(($3 + delays[i]))
+    [[ "${5:-}" == nowait ]] && FAIL_NEXT="$3"
     if [[ "$FAIL_NOTIFIED" -ne 1 ]]; then
         if [[ "$FAIL_CLASS" == permanent ]]; then
             notify "DNS update rejected" high "warning" \
@@ -1316,24 +1352,31 @@ setup_url_secret() {
 
 # Writes the config atomically. Keys not asked in this run but present before are kept.
 setup_write_config() {
-    local tmp key
+    local tmp
     mkdir -p "$CONFIG_DIR" || die "cannot create $CONFIG_DIR"
     chmod 755 "$CONFIG_DIR"
     tmp=$(mktemp "$CONFIG_DIR/.config.XXXXXX") || die "cannot write $CONFIG_DIR"
     {
         printf '# ddns-watch configuration, written by "ddns-watch setup" on %s.\n' "$(date '+%F %R')"
-        printf '# Edit freely (KEY=value); changes apply on the next run. After changing IFACE:\n'
-        printf '#   systemctl restart ddns-watch\n'
-        for key in "${NEW_KEYS[@]}"; do
-            [[ -n "${NEW[$key]:-}" ]] && printf '%s=%s\n' "$key" "${NEW[$key]}"
-        done
-        for key in $(printf '%s\n' "${!OLD[@]}" | sort); do
-            [[ -v "NEW[$key]" ]] && continue
-            printf '%s=%s\n' "$key" "${OLD[$key]}"
-        done
+        printf '# Edit freely (KEY=value); changes apply on the next run. To switch the provider\n'
+        printf '# use "sudo ddns-watch setup" (it hands the new provider'"'"'s secret to the service).\n'
+        setup_render_config
     } > "$tmp"
     chmod 644 "$tmp"
     mv "$tmp" "$CONFIG_FILE"
+}
+
+# The config as it will be saved: the answers of this run, then every earlier setting that was not
+# asked again (e.g. NETCUP_ZONE). The login test uses exactly this, so test and result match.
+setup_render_config() {
+    local key
+    for key in "${NEW_KEYS[@]}"; do
+        [[ -n "${NEW[$key]:-}" ]] && printf '%s=%s\n' "$key" "${NEW[$key]}"
+    done
+    for key in $(printf '%s\n' "${!OLD[@]}" | sort); do
+        [[ -v "NEW[$key]" ]] && continue
+        printf '%s=%s\n' "$key" "${OLD[$key]}"
+    done
 }
 
 # setup_login_test: read-only check with the answers so far. Output of the check goes to
@@ -1341,8 +1384,8 @@ setup_write_config() {
 setup_login_test() {
     local tmpconf key rc=0
     tmpconf=$(mktemp)
-    { for key in "${NEW_KEYS[@]}"; do printf '%s=%s\n' "$key" "${NEW[$key]}"; done
-      printf 'IFACE=%s\n' "${OLD[IFACE]:-lo}"; } > "$tmpconf"
+    # The interface is chosen only later (step 4); the login test does not need it.
+    { setup_render_config; [[ -v "NEW[IFACE]" || -n "${OLD[IFACE]:-}" ]] || printf 'IFACE=lo\n'; } > "$tmpconf"
     (
         CONFIG_FILE="$tmpconf"
         load_config && load_secrets && provider_check "" "" || exit 1
@@ -1657,13 +1700,18 @@ setup() {
     s_ok "Config written         ${S_D}$CONFIG_FILE${S_R}"
     write_cred_dropin
     if [[ -n "$interval" ]]; then
+        # Timer settings are lists: a plain OnUnitActiveSec= in a drop-in would ADD a second
+        # interval (the shorter one wins). An empty assignment clears the list - and with it
+        # OnBootSec, so both are set again.
         mkdir -p "$UNIT_DIR/ddns-watch-ipv4.timer.d"
-        printf '# Written by "ddns-watch setup".\n[Timer]\nOnUnitActiveSec=%ss\n' "$interval" \
-            > "$UNIT_DIR/ddns-watch-ipv4.timer.d/interval.conf"
+        printf '# Written by "ddns-watch setup".\n[Timer]\nOnBootSec=\nOnUnitActiveSec=\nOnBootSec=2min\nOnUnitActiveSec=%ss\n' \
+            "$interval" > "$UNIT_DIR/ddns-watch-ipv4.timer.d/interval.conf"
     fi
     systemctl daemon-reload
     if systemctl enable --now ddns-watch.service ddns-watch-ipv4.timer >/dev/null 2>&1; then
         systemctl restart ddns-watch.service 2>/dev/null || true
+        # A running timer keeps its old schedule until it is restarted.
+        systemctl restart ddns-watch-ipv4.timer 2>/dev/null || true
         s_ok "Services started       ${S_D}ddns-watch.service, ddns-watch-ipv4.timer${S_R}"
     else
         s_bad "Could not start the services (see: systemctl status ddns-watch)"
@@ -1777,10 +1825,13 @@ show_status() {
         for s in $PROVIDER_SECRETS $(core_secrets_in_use); do
             if [[ ! -f "$CRED_STORE/$s" ]]; then
                 state="not stored"
-            elif systemd-creds decrypt --name="$s" "$CRED_STORE/$s" - >/dev/null 2>&1; then
-                state="ok (encrypted)"
-            else
+            elif ! systemd-creds decrypt --name="$s" "$CRED_STORE/$s" - >/dev/null 2>&1; then
                 state="CANNOT DECRYPT -> ddns-watch set-secret $s"
+            elif ! grep -qs "^LoadCredentialEncrypted=$s:" "$UNIT_DIR/ddns-watch.service.d/credentials.conf"; then
+                # Stored, but not handed to the service (e.g. PROVIDER changed by hand).
+                state="stored, but NOT given to the service -> sudo ddns-watch setup"
+            else
+                state="ok (encrypted)"
             fi
             printf '  %-26s %s\n' "$s" "$state"
         done
