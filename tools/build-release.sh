@@ -17,7 +17,7 @@ stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 
 mkdir -p "$stage/$d" "$out"
-for f in ddns-watch.sh install.sh providers systemd LICENSE README.md CHANGELOG.md CONTRIBUTING.md config.example; do
+for f in ddns-watch.sh install.sh providers systemd LICENSE README.md CHANGELOG.md CONTRIBUTING.md ROADMAP.md config.example; do
     cp -r "$root/$f" "$stage/$d/"
 done
 sed -i "s/^VERSION=\"[^\"]*\"/VERSION=\"$ver\"/" "$stage/$d/ddns-watch.sh" "$stage/$d/install.sh"

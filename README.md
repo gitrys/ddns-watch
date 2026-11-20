@@ -60,7 +60,8 @@ sudo ddns-watch uninstall         # remove (--purge: also config and secrets)
 ddns-watch providers              # available provider plugins
 ```
 
-Only one hostname is updated. Make every other name a `CNAME` to it.
+Only one hostname is updated. Make every other name a `CNAME` to it. (Several hostnames are on
+the [roadmap](ROADMAP.md).)
 
 ## Where things are
 
