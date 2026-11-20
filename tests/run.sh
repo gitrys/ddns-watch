@@ -181,6 +181,9 @@ cat > "$STUB/systemctl" << 'EOF'
 #!/bin/bash
 if [[ "$1" == "--version" ]]; then echo "systemd ${STUB_SYSTEMD_VERSION:-255} (255.4)"; exit 0; fi
 echo "$*" >> "$STUB_SYSTEMCTL_LOG"
+# "show -p Result": result of the last oneshot run (STUB_RESULT, default success)
+[[ "$1" == show && "$*" == *Result* ]] && echo "${STUB_RESULT:-success}"
+exit 0
 EOF
 cat > "$STUB/gh" << 'EOF'
 #!/bin/bash
@@ -412,10 +415,13 @@ run_setup() {
 conf_has() { grep -qx "$1" "$D/etc/config"; }
 
 mock_reset; new_case netcup; rm -f "$D/etc/config"
-run_setup netcup example.com RESTTOKEN lo "" "" "$MOCK/notify" "" "" ""
+run_setup netcup example.com RESTTOKEN lo "" "$MOCK/notify" "" "" ""
 [[ -n "${SHOW_SETUP:-}" ]] && printf '%s\n' "$OUT"   # SHOW_SETUP=1 tests/run.sh: see the dialog
-expect "setup: fresh install completes" has "Done. ddns-watch is running."
-expect "  ... login tested against the provider" has "Login OK."
+expect "setup: fresh install completes" eval '[[ "$OUT" == *"Config written"* && "$OUT" == *"Services started"* ]]'
+expect "  ... login tested against the provider" has "Login OK"
+expect "  ... records shown compactly (A, CNAMEs in one line)" eval '[[ "$OUT" == *"Current records for example.com"* && "$OUT" == *"CNAME  www"* ]]'
+expect "  ... progress bar and summary box" eval '[[ "$OUT" == *"Step 6 of 6"* && "$OUT" == *"Summary"* ]]'
+expect "  ... first check ok -> 'ddns-watch is running.'" has "ddns-watch is running."
 expect "  ... config written" eval 'conf_has PROVIDER=netcup && conf_has HOSTNAME=example.com && conf_has IFACE=lo'
 expect "  ... IPv4 source suggested: dns (no router answer)" eval 'conf_has IPV4_SOURCE=dns && conf_has IPV4_INTERVAL=300'
 expect "  ... notifications" conf_has "NOTIFY_URL=$MOCK/notify"
@@ -431,8 +437,9 @@ expect "setup: wrong key -> test fails, abort leaves no config" eval '[[ "$OUT" 
 mock_reset upnp-cgnat; new_case netcup
 printf 'UPNP_URL=%s/upnp/control\nNETCUP_ZONE=example.com\n' "$MOCK" >> "$D/etc/config"
 run_store set-secret netcup-api-key <<< 'RESTTOKEN'
-run_setup "" "" "" "" "" "" "" ""
-expect "setup: re-run keeps answers (Enter everywhere)" has "Done."
+STUB_RESULT=exit-code run_setup "" "" "" "" "" "" "" ""
+expect "setup: re-run keeps answers (Enter everywhere)" has "Config written"
+expect "  ... first check failed -> says so, with what happens next" eval '[[ "$OUT" == *"First update failed"* && "$OUT" == *"retries automatically"* ]]'
 expect "  ... router with CGNAT address -> IPv6 only suggested" conf_has RECORDS=AAAA
 expect "  ... settings not asked are kept" eval 'conf_has NETCUP_ZONE=example.com && conf_has "UPNP_URL=$MOCK/upnp/control"'
 
@@ -444,12 +451,12 @@ printf '%s\n' "$V6_ADDRS" > "$D/ip6.eth0"
 printf '%s\n' '    inet6 2001:db8:1::aaaa:1234/64 scope global temporary dynamic' > "$D/ip6.wlan0"
 DDNS_TEST_IPV6='' STUB_LINKS="$LINKS" STUB_ROUTE6="$ROUTE6" STUB_IP6_FILE="$D/ip6" \
     run_setup netcup example.com RESTTOKEN "" "" "" "" "" ""
-[[ -n "${SHOW_SETUP:-}" ]] && sed -n '/Step 5 of 6/,/Network interface/p' <<< "$OUT"
+[[ -n "${SHOW_SETUP:-}" ]] && sed -n '/Step 4 of 6/,/Step 6 of 6/p' <<< "$OUT"
 expect "discoverer: table shows the IPv6 that would be published" has "2001:db8:1::67c:16ff:fedf:a200"
 expect "  ... marks the default route" eval '[[ "$(grep "eth0" <<< "$OUT" | head -n 1)" == *"default route"* ]]'
 expect "  ... adapter without stable IPv6 says so" eval '[[ "$(grep " wlan0 " <<< "$OUT")" == *"no stable public IPv6"* ]]'
-expect "  ... hides lo, docker, veth and bridges" eval '! grep -Eq "^  [0-9]+\) +(lo|docker0|veth12ab|br-5f2a) " <<< "$OUT"'
-expect "  ... recommends eth0, Enter takes it" eval '[[ "$OUT" == *"Recommended: eth0"* ]] && conf_has IFACE=eth0'
+expect "  ... hides lo, docker, veth and bridges" eval '! grep -Eq "^ +[0-9]+ +(lo|docker0|veth12ab|br-5f2a) " <<< "$OUT"'
+expect "  ... recommends eth0, Enter takes it" eval '[[ "$(grep -E "^ +1 +eth0 " <<< "$OUT")" == *recommended* ]] && conf_has IFACE=eth0'
 mock_reset; new_case netcup; rm -f "$D/etc/config"
 printf '%s\n' "$V6_ADDRS" > "$D/ip6.eth0"
 DDNS_TEST_IPV6='' STUB_LINKS="$LINKS" STUB_ROUTE6="$ROUTE6" STUB_IP6_FILE="$D/ip6" \
@@ -458,7 +465,7 @@ expect "discoverer: choose by number (2 = wlan0)" conf_has IFACE=wlan0
 mock_reset; new_case netcup; rm -f "$D/etc/config"
 DDNS_TEST_IPV6='' STUB_LINKS="$LINKS" STUB_ROUTE6="$ROUTE6" STUB_IP6_FILE="$D/none" \
     run_setup netcup example.com RESTTOKEN "" n "" "" "" "" ""
-expect "discoverer: warns when no interface has a public IPv6" has "no interface has a stable public IPv6"
+expect "discoverer: warns when no interface has a public IPv6" has "No interface has a stable public IPv6"
 
 echo "== status / uninstall"
 mock_reset; new_case netcup

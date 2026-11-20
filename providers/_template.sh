@@ -53,6 +53,10 @@ provider_update() {
     return 1
 }
 
+# Optional: provider_records prints the zone's records after provider_check, one per line as
+# "name<TAB>type<TAB>value" (name relative to the zone, "@" for the zone itself). The setup then
+# shows them compactly. Without it, the setup shows the output of provider_check.
+
 # provider_check IPV4 IPV6: read-only. Test the login, show the current records and what an
 # update would change. Must not change anything.
 provider_check() {

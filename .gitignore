@@ -6,16 +6,12 @@
 /last
 *.swp
 
-# Backups and personal notes
+# Backups
 *.bak
 *.bak-*
-umzug-strato-netcup.md
-docs/plan-hardening.md
 
 # Build and test artifacts
 /dist/
 tests/tmp/
 __pycache__/
 
-# Local mockups (not part of the project)
-mockups/

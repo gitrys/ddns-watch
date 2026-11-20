@@ -966,6 +966,56 @@ show_providers() {
 
 # ---------------------------------------------------------------- guided setup
 
+# Look: colors only on a terminal (and not with NO_COLOR), Unicode symbols only with a UTF-8 locale.
+setup_style() {
+    if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+        S_B=$'\e[1m' S_D=$'\e[2m' S_R=$'\e[0m' S_C=$'\e[36m' S_G=$'\e[32m' S_Y=$'\e[33m' S_RED=$'\e[31m'
+    else
+        S_B="" S_D="" S_R="" S_C="" S_G="" S_Y="" S_RED=""
+    fi
+    if [[ "$(locale charmap 2>/dev/null)" == UTF-8 ]]; then
+        S_OK="✔" S_BAD="✘" S_STAR="★" S_ARROW="›" S_BULLET="•" S_DONE="━━━━" S_TODO="────"
+        S_TL="╭" S_TR="╮" S_BL="╰" S_BR="╯" S_H="─" S_V="│"
+    else
+        S_OK="+" S_BAD="x" S_STAR="*" S_ARROW=">" S_BULLET="-" S_DONE="====" S_TODO="----"
+        S_TL="+" S_TR="+" S_BL="+" S_BR="+" S_H="-" S_V="|"
+    fi
+}
+
+s_ok()   { printf '  %s%s%s %s\n' "$S_G" "$S_OK" "$S_R" "$*"; }
+s_bad()  { printf '  %s%s%s %s\n' "$S_RED" "$S_BAD" "$S_R" "$*"; }
+s_warn() { printf '  %s!%s %s\n' "$S_Y" "$S_R" "$*"; }
+s_info() { # dim, wrapped at 78 columns
+    local line
+    while IFS= read -r line; do
+        printf '  %s%s%s\n' "$S_D" "$line" "$S_R"
+    done < <(printf '%s\n' "$*" | fold -s -w 76)
+}
+
+# s_box COLOR LINE...: a frame of fixed width around plain-text lines (longer ones are cut).
+s_box() {
+    local color="$1" w=64 line h="" j
+    shift
+    for ((j = 0; j < w; j++)); do h+="$S_H"; done
+    printf '  %s%s%s%s%s\n' "$color" "$S_TL" "$h" "$S_TR" "$S_R"
+    for line in "$@"; do
+        (( ${#line} > w - 4 )) && line="${line:0:$((w - 7))}..."
+        printf '  %s%s%s  %-*s  %s%s%s\n' "$color" "$S_V" "$S_R" "$((w - 4))" "$line" "$color" "$S_V" "$S_R"
+    done
+    printf '  %s%s%s%s%s\n' "$color" "$S_BL" "$h" "$S_BR" "$S_R"
+}
+
+# step N TITLE: progress bar (done green, current cyan, rest dim) and title, one below the other.
+step() {
+    local i bar=""
+    for i in 1 2 3 4 5 6; do
+        if (( i < $1 )); then bar+="${S_G}${S_DONE}${S_R} "
+        elif (( i == $1 )); then bar+="${S_C}${S_DONE}${S_R} "
+        else bar+="${S_D}${S_TODO}${S_R} "; fi
+    done
+    printf '\n %s\n %sStep %s of 6%s  %s%s%s\n\n' "$bar" "$S_D" "$1" "$S_R" "$S_B" "$2" "$S_R"
+}
+
 # Prompts read from the terminal (also when the installer runs as "curl ... | sudo bash").
 # DDNS_SETUP_INPUT replaces the terminal in tests.
 setup_open_input() {
@@ -977,11 +1027,9 @@ setup_open_input() {
 # ask PROMPT DEFAULT -> REPLY_VALUE (Enter keeps DEFAULT)
 ask() {
     local v
-    if [[ -n "$2" ]]; then
-        printf '%s [%s]: ' "$1" "$2" >&2
-    else
-        printf '%s: ' "$1" >&2
-    fi
+    printf '  %s%s%s %s' "$S_C" "$S_ARROW" "$S_R" "$1" >&2
+    [[ -n "$2" ]] && printf ' %s[%s]%s' "$S_D" "$2" "$S_R" >&2
+    printf ' ' >&2
     IFS= read -r -u 7 v || v=""
     v="${v%$'\r'}"
     v="${v#"${v%%[![:space:]]*}"}"
@@ -994,9 +1042,10 @@ ask() {
 # ask_secret PROMPT -> REPLY_VALUE (hidden input; empty = keep / skip)
 ask_secret() {
     local v
-    printf '%s: ' "$1" >&2
+    printf '  %s%s%s %s ' "$S_C" "$S_ARROW" "$S_R" "$1" >&2
     if [[ -z "${DDNS_SETUP_INPUT:-}" ]]; then
         IFS= read -r -s -u 7 v || v=""
+        [[ -n "$v" ]] && printf '%s' "${S_D}(entered)${S_R}" >&2
         printf '\n' >&2
     else
         IFS= read -r -u 7 v || v=""
@@ -1007,26 +1056,22 @@ ask_secret() {
 
 # ask_yes PROMPT DEFAULT(y|n) -> returns 0 for yes
 ask_yes() {
-    local d="$2" hint="[y/N]"
-    [[ "$d" == y ]] && hint="[Y/n]"
+    local d="$2" hint="y/N"
+    [[ "$d" == y ]] && hint="Y/n"
     while true; do
-        ask "$1 $hint" ""
+        ask "$1" "$hint"
+        [[ "$REPLY_VALUE" == "$hint" ]] && REPLY_VALUE=""
         case "${REPLY_VALUE,,}" in
             "") [[ "$d" == y ]]; return ;;
             y|yes) return 0 ;;
             n|no) return 1 ;;
         esac
-        say "Please answer y or n."
+        s_info "Please answer y or n."
     done
 }
 
-step() {
-    say
-    say "--- Step $1 of 6: $2"
-}
-
-# Network interfaces worth offering in step 5: no loopback and no virtual ones (Docker, bridges,
-# libvirt). Prints "name<TAB>state".
+# Network interfaces worth offering: no loopback and no virtual ones (Docker, bridges, libvirt).
+# Prints "name<TAB>state".
 list_ifaces() {
     ip -br link 2>/dev/null | awk '
         { n = $1; sub(/@.*/, "", n) }
@@ -1034,35 +1079,41 @@ list_ifaces() {
         { print n "\t" $2 }'
 }
 
-# Step 5 discoverer: one numbered line per interface with the IPv6 that would really be published
-# (same choice as get_ipv6) and its IPv4. Sets IFACE_LIST (names) and IFACE_RECOMMENDED.
+# Step 4: one numbered line per interface with the IPv6 that would really be published (same
+# choice as get_ipv6). Sets IFACE_LIST (names) and IFACE_RECOMMENDED.
 show_iface_table() {
-    local default_if name state v6 v4 mark i=0 first_v6=""
+    local default_if name state v6 i=0 first_v6="" st note
     default_if=$(detect_iface)
-    IFACE_LIST=()
+    IFACE_LIST=() IFACE_V6=()
     IFACE_RECOMMENDED=""
-    printf '  %-3s %-12s %-6s %-40s %s\n' "#" "Interface" "State" "IPv6 that would be published" "IPv4"
     while IFS=$'\t' read -r name state; do
         [[ -n "$name" ]] || continue
-        i=$((i + 1))
         IFACE_LIST+=("$name")
         v6=$(IFACE="$name" get_ipv6 2>/dev/null)
-        v4=$(IFACE="$name" ipv4_from_interface | head -n 1)
-        mark=""
-        [[ "$name" == "$default_if" ]] && mark="default route"
-        if [[ -n "$v6" && "$name" == "$default_if" ]]; then
-            IFACE_RECOMMENDED="$name"
-        fi
+        IFACE_V6+=("$v6")
+        [[ -n "$v6" && "$name" == "$default_if" ]] && IFACE_RECOMMENDED="$name"
         [[ -n "$v6" && -z "$first_v6" ]] && first_v6="$name"
-        printf '  %-3s %-12s %-6s %-40s %-15s %s\n' "$i)" "$name" "$state" \
-            "${v6:-none (no stable public IPv6)}" "${v4:--}" "$mark"
     done < <(list_ifaces)
     [[ -n "$IFACE_RECOMMENDED" ]] || IFACE_RECOMMENDED="${first_v6:-$default_if}"
+
+    printf '    %s#  %-12s %-6s %-40s %s%s\n' "$S_D" "Name" "State" "IPv6 that will be published" "Note" "$S_R"
+    for name in "${IFACE_LIST[@]}"; do
+        i=$((i + 1))
+        v6="${IFACE_V6[i - 1]}"
+        state=$(list_ifaces | awk -v n="$name" '$1 == n { print $2 }')
+        st="$S_D"; [[ "$state" == UP ]] && st="$S_G"
+        note=""
+        [[ "$name" == "$default_if" ]] && note="default route"
+        [[ "$name" == "$IFACE_RECOMMENDED" ]] && note="${S_Y}${S_STAR} recommended${S_R}${note:+  ${S_D}$note${S_R}}"
+        printf '    %s%-2s%s %-12s %s%-6s%s ' "$S_C" "$i" "$S_R" "$name" "$st" "$state" "$S_R"
+        if [[ -n "$v6" ]]; then printf '%-40s ' "$v6"; else printf '%s%-40s%s ' "$S_D" "none (no stable public IPv6)" "$S_R"; fi
+        printf '%s\n' "$note"
+    done
     if [[ -z "$first_v6" ]]; then
-        say "  Note: no interface has a stable public IPv6, so only the A record (IPv4) can be kept"
-        say "  up to date, unless one appears later."
+        echo
+        s_warn "No interface has a stable public IPv6, so only the A record (IPv4) can be kept"
+        s_warn "up to date, unless one appears later."
     fi
-    [[ -n "$IFACE_RECOMMENDED" ]] && say "  Recommended: $IFACE_RECOMMENDED"
 }
 
 # Writes the config atomically. Keys not asked in this run but present before are kept.
@@ -1087,9 +1138,41 @@ setup_write_config() {
     mv "$tmp" "$CONFIG_FILE"
 }
 
+# setup_login_test: read-only check with the answers so far. Output of the check goes to
+# $SETUP_CHECK_LOG, the zone's records (if the plugin can list them) to $SETUP_RECORDS.
+setup_login_test() {
+    local tmpconf key rc=0
+    tmpconf=$(mktemp)
+    { for key in "${NEW_KEYS[@]}"; do printf '%s=%s\n' "$key" "${NEW[$key]}"; done
+      printf 'IFACE=%s\n' "${OLD[IFACE]:-lo}"; } > "$tmpconf"
+    (
+        CONFIG_FILE="$tmpconf"
+        load_config && load_secrets && provider_check "" "" || exit 1
+        if declare -F provider_records >/dev/null; then provider_records > "$SETUP_RECORDS"; fi
+    ) > "$SETUP_CHECK_LOG" 2>&1 || rc=1
+    rm -f "$tmpconf"
+    return "$rc"
+}
+
+# Shows the A/AAAA records of the hostname, CNAMEs pointing to it in one line, the rest counted.
+setup_show_records() {
+    local host="$DDNS_HOSTNAME" rel zone cnames others
+    zone=$(awk -F. '{ print $(NF - 1) "." $NF }' <<< "$host")
+    rel="${host%."$zone"}"
+    [[ "$host" == "$zone" ]] && rel="@"
+    printf '  %sCurrent records for %s%s\n' "$S_D" "$host" "$S_R"
+    awk -F'\t' -v r="$rel" '($1 == r || ($1 == "" && r == "@")) && ($2 == "A" || $2 == "AAAA") { printf "    %-10s %-6s %s\n", r, $2, $3 }' "$SETUP_RECORDS"
+    cnames=$(awk -F'\t' '$2 == "CNAME" { print $1 }' "$SETUP_RECORDS" | paste -sd ',' | sed 's/,/, /g')
+    [[ -n "$cnames" ]] && printf '    %s%-10s %-6s %s%s\n' "$S_D" "+$(awk -F'\t' '$2 == "CNAME"' "$SETUP_RECORDS" | wc -l)" "CNAME" "$cnames" "$S_R"
+    others=$(awk -F'\t' '$2 != "A" && $2 != "AAAA" && $2 != "CNAME" { print $2 }' "$SETUP_RECORDS" | sort -u | paste -sd ',' | sed 's/,/, /g')
+    [[ -n "$others" ]] && s_info "  (+$(awk -F'\t' '$2 != "A" && $2 != "AAAA" && $2 != "CNAME"' "$SETUP_RECORDS" | wc -l) more: $others)"
+    return 0
+}
+
 setup() {
     is_root || die "setup must run as root: sudo ddns-watch setup"
     check_systemd_version
+    setup_style
     setup_open_input
 
     declare -gA OLD=() NEW=()
@@ -1098,113 +1181,126 @@ setup() {
         for k in "${!CFG[@]}"; do OLD[$k]="${CFG[$k]}"; done
     fi
     set_new() { [[ -v "NEW[$1]" ]] || NEW_KEYS+=("$1"); NEW[$1]="$2"; }
+    SETUP_CHECK_LOG=$(mktemp) SETUP_RECORDS=$(mktemp)
+    trap 'rm -f "$SETUP_CHECK_LOG" "$SETUP_RECORDS"' EXIT
 
-    say "ddns-watch setup"
-    say
-    say "This keeps the DNS record (A and/or AAAA) of one hostname pointing at this machine."
-    say "It takes about 2 minutes. You need:"
-    say "  - the hostname to update (e.g. example.com or home.example.com)"
-    say "  - the login for your DNS provider (e.g. the netcup API key)"
-    say "Values in [brackets] are suggestions: press Enter to accept. Ctrl+C cancels; nothing is"
-    say "changed until you confirm the summary at the end."
+    echo
+    s_box "$S_C" "$(printf '%-*s%s' "$((60 - ${#VERSION} - 1))" "ddns-watch setup" "v$VERSION")" \
+        "Keeps the DNS record of one name pointing at this machine."
+    echo
+    printf '  Have ready:  %s the hostname (e.g. home.example.com)\n' "$S_BULLET"
+    printf '               %s the login for your DNS provider (e.g. netcup API key)\n' "$S_BULLET"
+    echo
+    s_info "Enter accepts the suggestion in [brackets]. Ctrl+C cancels at any time;"
+    s_info "nothing is changed before you confirm the summary."
 
     # ---- 1 provider
     step 1 "DNS provider"
-    say "Where is the DNS of your domain hosted?"
-    local n names=() default_p="${OLD[PROVIDER]:-}"
+    printf '  %sWhere is the DNS of your domain hosted?%s\n\n' "$S_B" "$S_R"
+    local n names=() i=0 default_p=""
     while IFS= read -r n; do
         names+=("$n")
-        (load_provider "$n" 2>/dev/null && printf '  %-10s %s\n' "$n" "$PROVIDER_DESCRIPTION")
+        i=$((i + 1))
+        [[ "$n" == "${OLD[PROVIDER]:-}" ]] && default_p="$i"
+        (load_provider "$n" 2>/dev/null && printf '    %s%-2s%s %-9s %s\n' "$S_C" "$i" "$S_R" "$n" "$PROVIDER_DESCRIPTION")
     done < <(list_providers)
+    echo
     while true; do
-        ask "Provider" "$default_p"
-        if provider_file "${REPLY_VALUE,,}" >/dev/null; then
-            break
+        ask "Provider (number or name)" "$default_p"
+        if [[ "$REPLY_VALUE" =~ ^[0-9]+$ ]] && (( REPLY_VALUE >= 1 && REPLY_VALUE <= ${#names[@]} )); then
+            REPLY_VALUE="${names[REPLY_VALUE - 1]}"
         fi
-        say "Please type one of: ${names[*]}"
+        provider_file "${REPLY_VALUE,,}" >/dev/null && break
+        s_info "Please type a number or one of: ${names[*]}"
     done
     set_new PROVIDER "${REPLY_VALUE,,}"
     PROVIDER="${NEW[PROVIDER]}"
     load_provider "$PROVIDER" || die "provider plugin $PROVIDER is broken"
+    s_ok "$PROVIDER"
 
     # ---- 2 hostname
     step 2 "Hostname"
-    say "The name whose A/AAAA records should point at this machine, e.g. example.com or"
-    say "home.example.com. Other names: make them CNAMEs to this one at your provider."
+    s_info "The name whose A/AAAA records follow this machine. Other names: CNAMEs to it."
+    echo
     while true; do
         ask "Hostname" "${OLD[HOSTNAME]:-}"
         REPLY_VALUE="${REPLY_VALUE%.}"
         REPLY_VALUE="${REPLY_VALUE,,}"
         [[ "$REPLY_VALUE" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] && break
-        say "That is not a valid domain name. Example: home.example.com"
+        s_info "That is not a valid domain name. Example: home.example.com"
     done
     set_new HOSTNAME "$REPLY_VALUE"
     DDNS_HOSTNAME="$REPLY_VALUE"
+    s_ok "$DDNS_HOSTNAME"
 
-    # ---- 3 provider settings + secrets
-    step 3 "Login for $PROVIDER"
+    # ---- 3 login (+ read-only test)
+    step 3 "Login"
     local key s ask_keys ask_secrets
     ask_keys="$PROVIDER_SETTINGS"
     [[ "$PROVIDER_ASK" != "-" ]] && ask_keys="$PROVIDER_ASK"
     ask_secrets="${PROVIDER_SECRETS%% *}"
     [[ "$PROVIDER_ASK_SECRETS" != "-" ]] && ask_secrets="$PROVIDER_ASK_SECRETS"
     for key in $ask_keys; do
-        say "$key: ${PROVIDER_HELP[$key]:-}"
+        printf '  %s%s%s\n' "$S_B" "$key" "$S_R"
+        s_info "${PROVIDER_HELP[$key]:-}"
         ask "$key" "${OLD[$key]:-}"
         set_new "$key" "$REPLY_VALUE"
+        echo
     done
     for s in $ask_secrets; do
-        say "$s: ${PROVIDER_HELP[$s]:-}"
+        printf '  %s%s%s\n' "$S_B" "$s" "$S_R"
+        s_info "${PROVIDER_HELP[$s]:-}"
+        s_info "It is stored encrypted on this machine."
         while true; do
             if secret_stored_ok "$s"; then
-                ask_secret "$s (input hidden; Enter = keep the stored one)"
+                ask_secret "$s, hidden ${S_D}[Enter = keep the stored one]${S_R}"
                 [[ -z "$REPLY_VALUE" ]] && break
             else
-                ask_secret "$s (input hidden)"
+                ask_secret "$s, hidden"
                 if [[ -z "$REPLY_VALUE" ]]; then
-                    say "This is needed. (Ctrl+C to cancel)"
+                    s_info "This is needed. (Ctrl+C to cancel)"
                     continue
                 fi
             fi
             store_secret "$s" "$REPLY_VALUE" || die "systemd-creds encrypt failed"
             REPLY_VALUE=""
-            say "Stored encrypted. Keep a copy in your password manager: after a hardware change you"
-            say "have to enter it again (sudo ddns-watch set-secret $s)."
             break
         done
     done
-
-    # ---- 4 test the login (read-only)
-    step 4 "Testing the login (read-only, changes nothing)"
-    local tmpconf rc
-    while true; do
-        tmpconf=$(mktemp)
-        { for key in "${NEW_KEYS[@]}"; do printf '%s=%s\n' "$key" "${NEW[$key]}"; done
-          printf 'IFACE=%s\n' "${OLD[IFACE]:-lo}"; } > "$tmpconf"
-        rc=0
-        ( CONFIG_FILE="$tmpconf"; load_config && load_secrets && provider_check "" "" ) || rc=$?
-        rm -f "$tmpconf"
-        if [[ "$rc" -eq 0 ]]; then
-            say "Login OK."
-            break
-        fi
-        say
-        say "The test did not pass (see above)."
+    echo
+    s_info "Testing the login (read-only, changes nothing) ..."
+    local login_ok=1
+    while ! setup_login_test; do
+        s_bad "The login test did not pass:"
+        sed 's/^/      /' "$SETUP_CHECK_LOG" | tail -n 12
+        echo
         ask "[r]e-enter the secret, [c]ontinue anyway, [a]bort" "r"
         case "${REPLY_VALUE,,}" in
-            c*) break ;;
+            c*) login_ok=0; break ;;
             a*) die "aborted; config unchanged (the secret entered above is stored)" ;;
         esac
         s="${ask_secrets%% *}"
-        ask_secret "$s (input hidden)"
+        ask_secret "$s, hidden"
         [[ -n "$REPLY_VALUE" ]] && { store_secret "$s" "$REPLY_VALUE" || die "systemd-creds encrypt failed"; }
         REPLY_VALUE=""
+        s_info "Testing again ..."
     done
+    if [[ "$login_ok" -eq 0 ]]; then
+        s_warn "Continuing without a working login: updates will fail until it is fixed."
+    elif [[ -s "$SETUP_RECORDS" ]]; then
+        s_ok "Login OK"
+        echo
+        setup_show_records
+    else
+        # The plugin cannot list records (e.g. dyndns2): show its short check output instead.
+        s_ok "Login OK"
+        sed 's/^/      /' "$SETUP_CHECK_LOG" | head -n 8
+    fi
 
-    # ---- 5 network
-    step 5 "Network"
-    say "The IPv6 address is read from the interface you pick here (and the IPv4 too, if it has a"
-    say "public one). Temporary privacy addresses and local-only addresses are never published."
+    # ---- 4 interface
+    step 4 "Network interface"
+    s_info "The IPv6 is read from this interface. Temporary and local-only addresses are skipped."
+    echo
     RECORDS="A+AAAA" IPV4_SOURCE=dns UPNP_URL="${OLD[UPNP_URL]:-}"
     IPV6_SUFFIX="${OLD[IPV6_SUFFIX]:-}" IPV6_SUFFIX_X=""
     if [[ -n "$IPV6_SUFFIX" ]]; then
@@ -1212,93 +1308,125 @@ setup() {
         IPV6_SUFFIX_X="${IPV6_SUFFIX_X:20}"
     fi
     show_iface_table
+    echo
     local det="${OLD[IFACE]:-$IFACE_RECOMMENDED}"
     while true; do
-        ask "Network interface (number or name)" "$det"
+        ask "Interface (number or name)" "$det"
         if [[ "$REPLY_VALUE" =~ ^[0-9]+$ ]] && (( REPLY_VALUE >= 1 && REPLY_VALUE <= ${#IFACE_LIST[@]} )); then
             REPLY_VALUE="${IFACE_LIST[REPLY_VALUE - 1]}"
         fi
         [[ "$REPLY_VALUE" =~ ^[A-Za-z0-9_.:@-]{1,15}$ ]] && ip link show dev "$REPLY_VALUE" >/dev/null 2>&1 && break
-        say "No interface named \"$REPLY_VALUE\". Type a number or a name from the list above."
+        s_info "No interface named \"$REPLY_VALUE\". Type a number or a name from the list above."
     done
     set_new IFACE "$REPLY_VALUE"
     IFACE="$REPLY_VALUE"
-
-    local v6 v4i v4u v4d sug_src="" sug_rec="A+AAAA" note=""
+    local v6 sug_rec="A+AAAA"
     v6=$(get_ipv6)
+    if [[ -n "$v6" ]]; then
+        s_ok "$IFACE  ${S_D}$S_BULLET  $v6${S_R}"
+    else
+        s_warn "$IFACE has no stable public IPv6 right now."
+        ask_yes "Publish an AAAA (IPv6) record anyway, once one appears?" n && sug_rec="A+AAAA" || sug_rec="A"
+    fi
+
+    # ---- 5 IPv4
+    step 5 "IPv4 address"
+    s_info "Your router gets the public IPv4. Where should ddns-watch ask for it?"
+    echo
+    local v4i v4u v4d sug="" srcs=(upnp dns interface none) how ans col
     v4i=$(ipv4_from_interface | head -n 1)
     v4u=$(ipv4_from_upnp)
     v4d=$(ipv4_from_dns)
-    say "Found:"
-    printf '  %-30s %s\n' "IPv6 on $IFACE:" "${v6:-none}" "IPv4 on $IFACE:" "${v4i:-none}" \
-        "IPv4 from the router (UPnP):" "${v4u:-no answer}" "IPv4 seen from outside:" "${v4d:-no answer}"
-    if is_ipv4 "$v4i" && ! is_nonpublic_ipv4 "$v4i"; then
-        sug_src=interface; note="this machine has a public IPv4 itself"
-    elif is_ipv4 "$v4u" && ! is_nonpublic_ipv4 "$v4u"; then
-        sug_src=upnp; note="the router tells its public IPv4 (local, every minute)"
-    elif is_ipv4 "$v4u" && is_nonpublic_ipv4 "$v4u"; then
-        sug_src=none; note="the router has no public IPv4 ($v4u: DS-Lite/CGNAT), so an A record would be wrong"
-    elif is_ipv4 "$v4d"; then
-        sug_src=dns; note="no router answer; ask public DNS services (every 5 minutes)"
-    else
-        sug_src=none; note="no IPv4 found"
-    fi
-    say "Suggestion for IPv4: $sug_src ($note)"
-    say "  interface = public IPv4 on $IFACE   upnp = ask the router   dns = ask public DNS services"
-    say "  none      = do not publish an A record (IPv6 only)"
+    if is_ipv4 "$v4i" && ! is_nonpublic_ipv4 "$v4i"; then sug=interface
+    elif is_ipv4 "$v4u" && ! is_nonpublic_ipv4 "$v4u"; then sug=upnp
+    elif is_ipv4 "$v4u"; then sug=none     # router has only a private/CGNAT IPv4 (DS-Lite)
+    elif is_ipv4 "$v4d"; then sug=dns
+    else sug=none; fi
+    [[ "$sug_rec" == A && "$sug" == none ]] && sug=dns
+    printf '    %s#  %-10s %-38s %s%s\n' "$S_D" "Source" "How" "Answer now" "$S_R"
+    for i in 0 1 2 3; do
+        case "${srcs[i]}" in
+            upnp) how="ask the router (local, every 60 s)"; ans="${v4u:-no answer}" ;;
+            dns) how="ask public DNS services (every 5 min)"; ans="${v4d:-no answer}" ;;
+            interface) how="public IPv4 on $IFACE"; ans="${v4i:-none}"
+                is_ipv4 "$v4i" && is_nonpublic_ipv4 "$v4i" && ans="none ($v4i is private)" ;;
+            none) how="no A record, IPv6 only"; ans="" ;;
+        esac
+        [[ "${srcs[i]}" == upnp ]] && is_ipv4 "$v4u" && is_nonpublic_ipv4 "$v4u" && ans="$v4u (not public: DS-Lite/CGNAT)"
+        col="$S_D"; is_ipv4 "${ans%% *}" && ! is_nonpublic_ipv4 "${ans%% *}" && col="$S_G"
+        printf '    %s%-2s%s %-10s %-38s %s%-30s%s' "$S_C" "$((i + 1))" "$S_R" "${srcs[i]}" "$how" "$col" "$ans" "$S_R"
+        [[ "${srcs[i]}" == "$sug" ]] && printf ' %s%s recommended%s' "$S_Y" "$S_STAR" "$S_R"
+        printf '\n'
+    done
+    echo
+    local def_src="${OLD[IPV4_SOURCE]:-$sug}"
+    [[ -n "${OLD[RECORDS]:-}" && "${OLD[RECORDS]}" == AAAA && -z "${OLD[IPV4_SOURCE]:-}" ]] && def_src=none
     while true; do
-        ask "IPv4 source" "${OLD[IPV4_SOURCE]:-$sug_src}"
-        case "${REPLY_VALUE,,}" in interface|upnp|dns|none) break ;; esac
-        say "Please type interface, upnp, dns or none."
+        ask "IPv4 source (number or name)" "$def_src"
+        [[ "$REPLY_VALUE" =~ ^[1-4]$ ]] && REPLY_VALUE="${srcs[REPLY_VALUE - 1]}"
+        case "${REPLY_VALUE,,}" in interface|upnp|dns|none|command) break ;; esac
+        s_info "Please type 1-4 or upnp, dns, interface, none."
     done
     local src="${REPLY_VALUE,,}" interval=""
-    if [[ -z "$v6" ]]; then
-        say "No stable IPv6 found on $IFACE."
-        ask_yes "Publish an AAAA (IPv6) record anyway, once one appears?" n && sug_rec="A+AAAA" || sug_rec="A"
-    fi
     if [[ "$src" == none ]]; then
         [[ "$sug_rec" == A ]] && die "neither IPv4 nor IPv6: nothing to publish"
         sug_rec="AAAA"
+        s_ok "none  ${S_D}$S_BULLET  IPv6 only (AAAA)${S_R}"
     else
         set_new IPV4_SOURCE "$src"
         case "$src" in upnp) interval=60 ;; *) interval=300 ;; esac
-        ask "Check the IPv4 every how many seconds" "${OLD[IPV4_INTERVAL]:-$interval}"
-        [[ "$REPLY_VALUE" =~ ^[0-9]{2,5}$ ]] || REPLY_VALUE="$interval"
-        interval="$REPLY_VALUE"
+        interval="${OLD[IPV4_INTERVAL]:-$interval}"
         set_new IPV4_INTERVAL "$interval"
+        s_ok "$src  ${S_D}$S_BULLET  checked every $interval s${S_R}"
+        s_info "  Reconnects usually change the IPv6 prefix too, so a new IPv4 is caught at once."
     fi
     set_new RECORDS "$sug_rec"
 
     # ---- 6 notifications
-    step 6 "Notifications (optional)"
-    say "ddns-watch can send a message when updates keep failing, e.g. to ntfy (self-hosted or"
-    say "ntfy.sh), Gotify or any webhook that takes a text POST. Enter = no notifications."
-    ask "Notification URL (e.g. https://ntfy.example.com/ddns)" "${OLD[NOTIFY_URL]:-}"
+    step 6 "Notifications ${S_D}(optional)${S_R}"
+    s_info "Get a message when updates keep failing (ntfy, Gotify, any webhook)."
+    echo
+    ask "Notification URL" "${OLD[NOTIFY_URL]:-none}"
+    [[ "$REPLY_VALUE" == none ]] && REPLY_VALUE=""
     if [[ -n "$REPLY_VALUE" ]]; then
         set_new NOTIFY_URL "$REPLY_VALUE"
-        ask_secret "Access token for it (input hidden; Enter = none/keep)"
+        ask_secret "Access token for it, hidden ${S_D}[Enter = none / keep]${S_R}"
         [[ -n "$REPLY_VALUE" ]] && { store_secret notify-token "$REPLY_VALUE" || die "systemd-creds encrypt failed"; }
         REPLY_VALUE=""
+    else
+        set_new NOTIFY_URL ""
+        s_info "  skipped"
     fi
-    say "Heartbeat: a URL called after every good run (Healthchecks, Uptime Kuma push monitor ...)."
-    say "If the calls stop, that service alerts you that this machine is down. Enter = none."
-    ask "Heartbeat URL" "${OLD[HEARTBEAT_URL]:-}"
-    [[ -n "$REPLY_VALUE" ]] && set_new HEARTBEAT_URL "$REPLY_VALUE"
+    ask "Heartbeat URL (Healthchecks, Uptime Kuma)" "${OLD[HEARTBEAT_URL]:-none}"
+    [[ "$REPLY_VALUE" == none ]] && REPLY_VALUE=""
+    set_new HEARTBEAT_URL "$REPLY_VALUE"
+    [[ -z "$REPLY_VALUE" ]] && s_info "  skipped"
 
     # ---- summary
-    say
-    say "--- Summary"
-    for key in "${NEW_KEYS[@]}"; do
-        [[ -n "${NEW[$key]}" ]] && printf '  %-15s %s\n' "$key" "${NEW[$key]}"
-    done
-    say "  secrets         stored encrypted in $CRED_STORE"
-    say "This writes $CONFIG_FILE, enables ddns-watch.service and ddns-watch-ipv4.timer"
-    say "and runs a first update."
-    ask_yes "Apply?" y || { say "Cancelled. The config was not changed."; return 0; }
+    local keyinfo="host key" rec_txt="A + AAAA" v4_txt
+    systemd-creds has-tpm2 >/dev/null 2>&1 && keyinfo="TPM + host key"
+    [[ "$sug_rec" == AAAA ]] && rec_txt="AAAA only"
+    [[ "$sug_rec" == A ]] && rec_txt="A only"
+    v4_txt="${NEW[IPV4_SOURCE]:-none}"
+    [[ -n "$interval" ]] && v4_txt+=" every $interval s"
+    printf '\n %sSummary%s\n\n' "$S_B" "$S_R"
+    s_box "$S_C" \
+        "$(printf '%-12s %s' Provider "$PROVIDER")" \
+        "$(printf '%-12s %s' Hostname "$DDNS_HOSTNAME")" \
+        "$(printf '%-12s %s' Records "$rec_txt")" \
+        "$(printf '%-12s %s' Interface "$IFACE${v6:+ -> $v6}")" \
+        "$(printf '%-12s %s' IPv4 "$v4_txt")" \
+        "$(printf '%-12s %s' Notify "${NEW[NOTIFY_URL]:-none}")" \
+        "$(printf '%-12s %s' Heartbeat "${NEW[HEARTBEAT_URL]:-none}")" \
+        "$(printf '%-12s %s' Secrets "encrypted ($keyinfo)")"
+    echo
+    ask_yes "Apply and start ddns-watch?" y || { echo; s_info "Cancelled. The config was not changed."; return 0; }
 
     # ---- apply
+    printf '\n %sApplying%s\n\n' "$S_B" "$S_R"
     setup_write_config
     load_config || die "the new config does not load (see above); please report this as a bug"
+    s_ok "Config written         ${S_D}$CONFIG_FILE${S_R}"
     write_cred_dropin
     if [[ -n "$interval" ]]; then
         mkdir -p "$UNIT_DIR/ddns-watch-ipv4.timer.d"
@@ -1306,24 +1434,46 @@ setup() {
             > "$UNIT_DIR/ddns-watch-ipv4.timer.d/interval.conf"
     fi
     systemctl daemon-reload
-    systemctl enable --now ddns-watch.service ddns-watch-ipv4.timer >/dev/null 2>&1 \
-        || warn "could not enable the services (see: systemctl status ddns-watch)"
-    systemctl restart ddns-watch.service 2>/dev/null || true
-    say
-    say "First update:"
-    if systemctl start ddns-watch-ipv4.service 2>/dev/null; then
-        journalctl -u ddns-watch-ipv4.service -n 4 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+    if systemctl enable --now ddns-watch.service ddns-watch-ipv4.timer >/dev/null 2>&1; then
+        systemctl restart ddns-watch.service 2>/dev/null || true
+        s_ok "Services started       ${S_D}ddns-watch.service, ddns-watch-ipv4.timer${S_R}"
     else
-        say "  failed, see: journalctl -u ddns-watch-ipv4.service -n 20"
+        s_bad "Could not start the services (see: systemctl status ddns-watch)"
     fi
-    say
-    say "Done. ddns-watch is running."
-    say "  Status:          ddns-watch status"
-    say "  Log:             journalctl -u ddns-watch -f"
-    say "  Other names:     create CNAMEs pointing to $DDNS_HOSTNAME at your provider"
-    say "  Change settings: sudo ddns-watch setup   (or edit $CONFIG_FILE)"
-    say "  Keep your API key in a password manager: after a hardware change run"
-    say "  sudo ddns-watch set-secret ${ask_secrets%% *}"
+
+    local since out result
+    since=$(date '+%Y-%m-%d %H:%M:%S')
+    systemctl start ddns-watch-ipv4.service >/dev/null 2>&1
+    # The service's own result decides; the journal lines are only shown.
+    result=$(systemctl show -p Result --value ddns-watch-ipv4.service 2>/dev/null)
+    out=$(journalctl -u ddns-watch-ipv4.service --since "$since" --no-pager -o cat 2>/dev/null \
+        | grep -v -e '^Start' -e '^Finish' -e '^Deactivated' -e 'Failed' -e 'Main process' | tail -n 4)
+    if [[ "$result" == success ]]; then
+        s_ok "First check            ${S_D}$(tail -n 1 <<< "${out:-done (details: ddns-watch status)}")${S_R}"
+        echo
+        s_box "$S_G" "ddns-watch is running."
+    else
+        s_bad "First update failed"
+        echo
+        if [[ -n "$out" ]]; then
+            s_info "  journalctl -u ddns-watch-ipv4 (last lines):"
+            sed 's/^/      /' <<< "$out"
+        fi
+        echo
+        printf '  %sWhat now%s\n' "$S_B" "$S_R"
+        printf '    %s The service retries automatically (1, 2, 5, then every 10 min).\n' "$S_BULLET"
+        printf '    %s Check:  ddns-watch status    Log:  journalctl -u ddns-watch -n 30\n' "$S_BULLET"
+        printf '    %s Your DNS records were not changed.\n' "$S_BULLET"
+    fi
+    echo
+    printf '  %sNext%s\n' "$S_B" "$S_R"
+    printf '    %-32s %s%s%s\n' "ddns-watch status" "$S_D" "how it is doing" "$S_R"
+    printf '    %-32s %s%s%s\n' "journalctl -u ddns-watch -f" "$S_D" "live log" "$S_R"
+    printf '    %-32s %s%s%s\n' "sudo ddns-watch setup" "$S_D" "change settings" "$S_R"
+    printf '    %-32s %s%s%s\n' "(other names)" "$S_D" "CNAMEs to $DDNS_HOSTNAME at your provider" "$S_R"
+    echo
+    s_warn "Keep your API key in a password manager. After a hardware change:"
+    printf '    sudo ddns-watch set-secret %s\n' "${ask_secrets%% *}"
 }
 
 # ---------------------------------------------------------------- status / uninstall
@@ -1363,8 +1513,9 @@ show_status() {
         if [[ "$ipv4" != "$LAST_IPV4" || "$ipv6" != "$LAST_IPV6" ]]; then
             say "           -> differs from now: the next run will update (or the last update failed)"
         fi
-    elif [[ -d "$STATE_DIR" && ! -r "$STATE_DIR" ]]; then
-        say "Last good: unknown (run as root to read $STATE_DIR)"
+    elif ! is_root; then
+        # The service keeps its state in /var/lib/private (DynamicUser), readable by root only.
+        say "Last good: unknown here (only root can read it: sudo ddns-watch status)"
     else
         say "Last good: never (no successful update yet)"
     fi
@@ -1373,8 +1524,14 @@ show_status() {
     for s in $UNITS; do
         printf '  %-26s %s\n' "$s" "$(unit_state "$s")"
     done
-    last_err=$(journalctl -u ddns-watch.service -u ddns-watch-ipv4.service -p err -n 1 -q --no-pager -o short-iso 2>/dev/null) || true
-    [[ -n "$last_err" ]] && say "Last error: $last_err"
+    # Only errors since the watcher was last (re)started; older ones are history.
+    local started
+    started=$(systemctl show -p ActiveEnterTimestamp --value ddns-watch.service 2>/dev/null)
+    if [[ -n "$started" && "$started" != "n/a" ]]; then
+        last_err=$(journalctl -u ddns-watch.service -u ddns-watch-ipv4.service -p err -n 1 -q --no-pager \
+            -o short-iso --since "$(date -d "$started" '+%F %T' 2>/dev/null || echo today)" 2>/dev/null) || true
+        [[ -n "$last_err" ]] && say "Last error: $last_err"
+    fi
     load_failure
     if [[ -n "$FAIL_CLASS" ]]; then
         say "FAILING:   since $(date -d "@$FAIL_SINCE" "+%F %T"), $FAIL_COUNT attempts, $FAIL_CLASS: $FAIL_MSG"

@@ -62,6 +62,13 @@ provider_secrets() {
 provider_update() { netcup_update "$@"; }
 provider_check() { netcup_check "$@"; }
 
+# Optional hook (used by setup after provider_check): the zone's records as
+# "name<TAB>type<TAB>value", name relative to the zone ("@" = the zone itself).
+provider_records() {
+    jq -r '.[] | [ ((.name // .hostname // "@") | if . == "" then "@" else . end),
+                   .type, (.rdata // .destination // "") ] | @tsv' <<< "${NETCUP_RECORDS:-[]}"
+}
+
 # ---------------------------------------------------------------- netcup
 #
 # netcup has two DNS APIs, and which one works depends on the domain:

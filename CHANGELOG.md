@@ -3,6 +3,22 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - unreleased
+
+### Changed
+- `ddns-watch setup` redesigned: progress bar with the steps one below the other, colors (only on
+  a terminal; `NO_COLOR` respected), aligned tables, choices by number with a recommendation,
+  framed summary, clear result of the first update with what happens next.
+- Setup shows the provider's records compactly (A/AAAA of the hostname, CNAMEs in one line);
+  plugins can provide them with the new optional `provider_records` hook (netcup does).
+- Setup no longer asks for the IPv4 check interval (60 s for upnp, otherwise 5 min;
+  `IPV4_INTERVAL` in the config still overrides it).
+
+### Fixed
+- `ddns-watch status` without root said "Last good: never"; the state is only readable by root,
+  so it now says so.
+- `status` showed errors from before the last restart of the service; now only newer ones.
+
 ## [1.0.1] - 2026-11-20
 
 ### Fixed
