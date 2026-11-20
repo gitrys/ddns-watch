@@ -3,7 +3,7 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
-## [1.5.0] - unreleased
+## [1.5.0] - 2026-11-20
 
 Fixes from a second external code review.
 
