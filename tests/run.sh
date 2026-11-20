@@ -177,7 +177,13 @@ cat > "$STUB/systemctl" << 'EOF'
 if [[ "$1" == "--version" ]]; then echo "systemd ${STUB_SYSTEMD_VERSION:-255} (255.4)"; exit 0; fi
 echo "$*" >> "$STUB_SYSTEMCTL_LOG"
 EOF
-chmod +x "$STUB/systemd-creds" "$STUB/systemctl"
+cat > "$STUB/gh" << 'EOF'
+#!/bin/bash
+# "gh attestation verify": test builds have no real attestation; STUB_GH_FAIL=1 simulates a bad one.
+[[ "$1 $2" == "attestation verify" ]] || exit 2
+[[ -z "${STUB_GH_FAIL:-}" ]]
+EOF
+chmod +x "$STUB/systemd-creds" "$STUB/systemctl" "$STUB/gh"
 
 # run_store ARGS: like run, but secrets come from the encrypted store (no credentials directory)
 run_store() {
@@ -487,6 +493,9 @@ expect "tampered checksum -> refused" has "does not match"
 new_case netcup
 OUT=$(inst_env bash -s -- --no-setup --yes < "$REL/v9.9.9/install.sh" 2>&1); RC=$?
 expect "piped install (curl | bash) downloads + verifies its release" eval '[[ "$OUT" == *"Checksum OK."* && -x "$D/prefix/bin/ddns-watch" ]]'
+expect "  ... and the attestation (gh present)" has "GitHub attestation OK"
+OUT=$(STUB_GH_FAIL=1 inst_env bash -s -- --no-setup --yes < "$REL/v9.9.9/install.sh" 2>&1); RC=$?
+expect "failed attestation -> refused" has "attestation check failed"
 mock_reset normal 2>/dev/null; curl -s -X POST -H 'Content-Type: application/json' -d '{"release":"9.9.10"}' "$MOCK/_reset" >/dev/null
 OUT=$(inst_env "$D/prefix/bin/ddns-watch" update --yes 2>&1); RC=$?
 expect "update: newer release installed" eval '[[ "$OUT" == *"Upgraded to 9.9.10"* ]]'
