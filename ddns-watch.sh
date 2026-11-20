@@ -994,15 +994,15 @@ s_info() { # dim, wrapped at 78 columns
 
 # s_box COLOR LINE...: a frame of fixed width around plain-text lines (longer ones are cut).
 s_box() {
-    local color="$1" w=64 line h="" j
+    local color="$1" w=64 line rule="" j
     shift
-    for ((j = 0; j < w; j++)); do h+="$S_H"; done
-    printf '  %s%s%s%s%s\n' "$color" "$S_TL" "$h" "$S_TR" "$S_R"
+    for ((j = 0; j < w; j++)); do rule+="$S_H"; done
+    printf '  %s%s%s%s%s\n' "$color" "$S_TL" "$rule" "$S_TR" "$S_R"
     for line in "$@"; do
         (( ${#line} > w - 4 )) && line="${line:0:$((w - 7))}..."
         printf '  %s%s%s  %-*s  %s%s%s\n' "$color" "$S_V" "$S_R" "$((w - 4))" "$line" "$color" "$S_V" "$S_R"
     done
-    printf '  %s%s%s%s%s\n' "$color" "$S_BL" "$h" "$S_BR" "$S_R"
+    printf '  %s%s%s%s%s\n' "$color" "$S_BL" "$rule" "$S_BR" "$S_R"
 }
 
 # step N TITLE: progress bar (done green, current cyan, rest dim) and title, one below the other.
