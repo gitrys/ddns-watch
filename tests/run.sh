@@ -136,7 +136,7 @@ expect "unknown command -> usage, rc 1" rc_is 1
 
 echo "== providers"
 mock_reset; new_case dyndns2
-echo "DYNDNS2_URL=$MOCK/nic/update" >> "$D/etc/config"
+printf 'DYNDNS2_URL=%s/nic/update\nDYNDNS2_ALLOW_HTTP=yes\n' "$MOCK" >> "$D/etc/config"
 printf '%s' 'p"a\ss' > "$D/creds/dyndns2-password"
 run
 expect "generic dyndns2 plugin updates (user defaults to hostname)" has "dyndns2: good 203.0.113.7"
@@ -144,6 +144,13 @@ new_case dyndns2
 echo "DYNDNS2_URL=$MOCK/nic/update?x=1&y=2" >> "$D/etc/config"
 run
 expect "dyndns2: URL with parameters rejected" has "must be an http(s) URL without parameters"
+new_case dyndns2
+echo "DYNDNS2_URL=$MOCK/nic/update" >> "$D/etc/config"
+run
+expect "dyndns2: http:// refused without DYNDNS2_ALLOW_HTTP=yes" has "sends the password unencrypted"
+mock_reset dyn500; new_case strato
+run
+expect "dyndns2: HTTP 500 with 'good' in the body counts as failure" eval '[[ "$RC" == 1 && "$OUT" == *"HTTP 500"* ]]'
 new_case strato
 run providers
 expect "providers lists all built-in plugins" has "netcup"
@@ -183,6 +190,8 @@ if [[ "$1" == "--version" ]]; then echo "systemd ${STUB_SYSTEMD_VERSION:-255} (2
 echo "$*" >> "$STUB_SYSTEMCTL_LOG"
 # "show -p Result": result of the last oneshot run (STUB_RESULT, default success)
 [[ "$1" == show && "$*" == *Result* ]] && echo "${STUB_RESULT:-success}"
+# "is-active": STUB_ACTIVE=no simulates a service that did not come up
+[[ "$1" == is-active && "${STUB_ACTIVE:-yes}" != yes ]] && exit 3
 exit 0
 EOF
 cat > "$STUB/gh" << 'EOF'
@@ -275,7 +284,7 @@ run_src() {
 mock_reset; new_case netcup
 printf 'IPV4_SOURCE=upnp\nUPNP_URL=%s/upnp/control\n' "$MOCK" >> "$D/etc/config"
 run_src
-expect "upnp: router's IPv4 published" zone_has @ A '["198.51.100.4"]'
+expect "upnp: router's IPv4 published" zone_has @ A '["81.2.69.142"]'
 mock_reset upnp-cgnat; new_case netcup
 printf 'IPV4_SOURCE=upnp\nUPNP_URL=%s/upnp/control\n' "$MOCK" >> "$D/etc/config"
 run_src
@@ -284,25 +293,25 @@ expect "  ... with a hint" has "not public (DS-Lite/CGNAT?)"
 expect "  ... AAAA still updated" zone_has @ AAAA '["2001:db8::7"]'
 mock_reset upnp-down; new_case netcup
 printf 'IPV4_SOURCE=upnp\nUPNP_URL=%s/upnp/control\n' "$MOCK" >> "$D/etc/config"
-STUB_CF=203.0.113.99 run_src
+STUB_CF=81.2.69.199 run_src
 expect "upnp down, no fallback: A left alone" zone_has @ A '["192.0.2.1"]'
 mock_reset upnp-down; new_case netcup
 printf 'IPV4_SOURCE=upnp\nUPNP_URL=%s/upnp/control\nIPV4_FALLBACK=dns\n' "$MOCK" >> "$D/etc/config"
-STUB_CF=203.0.113.99 run_src
-expect "upnp down + IPV4_FALLBACK=dns: DNS answer used" zone_has @ A '["203.0.113.99"]'
+STUB_CF=81.2.69.199 run_src
+expect "upnp down + IPV4_FALLBACK=dns: DNS answer used" zone_has @ A '["81.2.69.199"]'
 mock_reset; new_case netcup
 echo 'IPV4_SOURCE=dns' >> "$D/etc/config"
-STUB_OPENDNS=203.0.113.55 run_src
-expect "dns: Cloudflare silent -> OpenDNS used" zone_has @ A '["203.0.113.55"]'
+STUB_OPENDNS=81.2.69.155 run_src
+expect "dns: Cloudflare silent -> OpenDNS used" zone_has @ A '["81.2.69.155"]'
 mock_reset; new_case netcup
 echo 'IPV4_SOURCE=interface' >> "$D/etc/config"
-STUB_IP4='    inet 192.168.1.5/24 scope global eth0\n    inet 198.51.100.77/32 scope global eth0\n' run_src
-expect "interface: first public address used, private skipped" zone_has @ A '["198.51.100.77"]'
+STUB_IP4='    inet 192.168.1.5/24 scope global eth0\n    inet 81.2.69.177/32 scope global eth0\n' run_src
+expect "interface: first public address used, private skipped" zone_has @ A '["81.2.69.177"]'
 mock_reset; new_case netcup
-printf '#!/bin/sh\necho 198.51.100.88\n' > "$D/myip"; chmod +x "$D/myip"
+printf '#!/bin/sh\necho 81.2.69.188\n' > "$D/myip"; chmod +x "$D/myip"
 printf 'IPV4_SOURCE=command\nIPV4_COMMAND=%s\n' "$D/myip" >> "$D/etc/config"
 run_src
-expect "command: output of IPV4_COMMAND used" zone_has @ A '["198.51.100.88"]'
+expect "command: output of IPV4_COMMAND used" zone_has @ A '["81.2.69.188"]'
 mock_reset; new_case netcup
 echo 'RECORDS=AAAA' >> "$D/etc/config"
 run
@@ -427,37 +436,37 @@ echo "== IPv6 selection and watcher filter"
 run_v6() {
     OUT=$(env -u DDNS_TEST_IPV6 PATH="$SRC:$PATH" STUB_IP6_FILE="$D/ip6" DDNS_DEBOUNCE=0.2 \
         DDNS_CONFIG_DIR="$D/etc" DDNS_CREDENTIALS_DIR="$D/creds" \
-        DDNS_STATE_DIR="$D/state" DDNS_RUNTIME_DIR="$D/run" "$ROOT/ddns-watch.sh" "$@" 2>&1)
+        DDNS_STATE_DIR="$D/state" DDNS_RUNTIME_DIR="$D/run" timeout 60 "$ROOT/ddns-watch.sh" "$@" 2>&1)
     RC=$?
     printf '%s\n' "$OUT" >> "$TMP/all-output.log"
 }
-V6_ADDRS='    inet6 2001:db8:1::aaaa:1234/64 scope global temporary dynamic
-    inet6 2001:db8:1::5c1e:9b2:77a0:1/64 scope global dynamic mngtmpaddr
-    inet6 2001:db8:1::67c:16ff:fedf:a200/64 scope global dynamic mngtmpaddr
+V6_ADDRS='    inet6 2a03:4000:1::aaaa:1234/64 scope global temporary dynamic
+    inet6 2a03:4000:1::5c1e:9b2:77a0:1/64 scope global dynamic mngtmpaddr
+    inet6 2a03:4000:1::67c:16ff:fedf:a200/64 scope global dynamic mngtmpaddr
     inet6 fd00::67c:16ff:fedf:a200/64 scope global dynamic'
 mock_reset; new_case netcup
 printf '%s\n' "$V6_ADDRS" > "$D/ip6"
 run_v6
-expect "several stable IPv6: EUI-64 one chosen, temporary/ULA ignored" zone_has @ AAAA '["2001:db8:1::67c:16ff:fedf:a200"]'
+expect "several stable IPv6: EUI-64 one chosen, temporary/ULA ignored" zone_has @ AAAA '["2a03:4000:1::67c:16ff:fedf:a200"]'
 mock_reset; new_case netcup
 printf '%s\n' "$V6_ADDRS" > "$D/ip6"
 echo 'IPV6_SUFFIX=::5c1e:9b2:77a0:1' >> "$D/etc/config"
 run_v6
-expect "IPV6_SUFFIX picks that interface ID" zone_has @ AAAA '["2001:db8:1::5c1e:9b2:77a0:1"]'
+expect "IPV6_SUFFIX picks that interface ID" zone_has @ AAAA '["2a03:4000:1::5c1e:9b2:77a0:1"]'
 new_case netcup
 echo 'IPV6_SUFFIX=2001:db8::1' >> "$D/etc/config"
 run_v6
 expect "IPV6_SUFFIX must be an interface ID" has "must be an interface ID"
 mock_reset; new_case netcup
-printf '%s\n' '    inet6 2001:db8:1::aaaa:1234/64 scope global temporary dynamic' > "$D/ip6"
+printf '%s\n' '    inet6 2a03:4000:1::aaaa:1234/64 scope global temporary dynamic' > "$D/ip6"
 run_v6
 expect "only a temporary IPv6 -> no AAAA" zone_has @ AAAA '[]'
 mock_reset; new_case netcup
 printf '%s\n' "$V6_ADDRS" > "$D/ip6"
-printf '%s\n' '    inet6 2001:db8:2::67c:16ff:fedf:a200/64 scope global dynamic mngtmpaddr' > "$D/ip6.next"
+printf '%s\n' '    inet6 2a03:4000:2::67c:16ff:fedf:a200/64 scope global dynamic mngtmpaddr' > "$D/ip6.next"
 run_v6 watch
 expect "watch: event without change -> no update run" eval '[[ "$(grep -c "address changed" <<< "$OUT")" == 1 ]]'
-expect "  ... prefix change -> update" zone_has @ AAAA '["2001:db8:2::67c:16ff:fedf:a200"]'
+expect "  ... prefix change -> update" zone_has @ AAAA '["2a03:4000:2::67c:16ff:fedf:a200"]'
 
 echo "== guided setup"
 # run_setup INPUT_LINES...: answers the prompts in order (DDNS_SETUP_INPUT replaces the terminal)
@@ -466,7 +475,7 @@ run_setup() {
     OUT=$(env -u DDNS_TEST_IPV4 PATH="$STUB:$SRC:$PATH" DDNS_TEST_ROOT=1 DDNS_SETUP_INPUT="$D/answers" \
         DDNS_CONFIG_DIR="$D/etc" DDNS_CRED_STORE="$D/store" DDNS_UNIT_DIR="$D/units" \
         DDNS_STATE_DIR="$D/state" DDNS_RUNTIME_DIR="$D/run" STUB_SYSTEMCTL_LOG="$D/systemctl.log" \
-        STUB_CF=203.0.113.9 "$ROOT/ddns-watch.sh" setup 2>&1)
+        STUB_CF=81.2.69.109 timeout 60 "$ROOT/ddns-watch.sh" setup 2>&1)
     RC=$?
     printf '%s\n' "$OUT" >> "$TMP/all-output.log"
 }
@@ -507,11 +516,11 @@ LINKS='lo               UNKNOWN 00:00:00:00:00:00\neth0             UP      52:5
 ROUTE6='default via fe80::1 dev eth0 proto ra metric 100\n'
 mock_reset; new_case netcup; rm -f "$D/etc/config"
 printf '%s\n' "$V6_ADDRS" > "$D/ip6.eth0"
-printf '%s\n' '    inet6 2001:db8:1::aaaa:1234/64 scope global temporary dynamic' > "$D/ip6.wlan0"
+printf '%s\n' '    inet6 2a03:4000:1::aaaa:1234/64 scope global temporary dynamic' > "$D/ip6.wlan0"
 DDNS_TEST_IPV6='' STUB_LINKS="$LINKS" STUB_ROUTE6="$ROUTE6" STUB_IP6_FILE="$D/ip6" \
     run_setup netcup example.com RESTTOKEN "" "" "" "" "" ""
 [[ -n "${SHOW_SETUP:-}" ]] && sed -n '/Step 4 of 6/,/Step 6 of 6/p' <<< "$OUT"
-expect "discoverer: table shows the IPv6 that would be published" has "2001:db8:1::67c:16ff:fedf:a200"
+expect "discoverer: table shows the IPv6 that would be published" has "2a03:4000:1::67c:16ff:fedf:a200"
 expect "  ... marks the default route" eval '[[ "$(grep "eth0" <<< "$OUT" | head -n 1)" == *"default route"* ]]'
 expect "  ... adapter without stable IPv6 says so" eval '[[ "$(grep " wlan0 " <<< "$OUT")" == *"no stable public IPv6"* ]]'
 expect "  ... hides lo, docker, veth and bridges" eval '! grep -Eq "^ +[0-9]+ +(lo|docker0|veth12ab|br-5f2a) " <<< "$OUT"'
@@ -557,7 +566,7 @@ echo "== installer, releases, update"
 inst_env() {
     env PATH="$STUB:$PATH" DDNS_TEST_ROOT=1 DDNS_PREFIX="$D/prefix" DDNS_UNIT_DIR="$D/units" \
         DDNS_CONFIG_DIR="$D/etc" DDNS_CRED_STORE="$D/etc/credentials" DDNS_STATE_DIR="$D/state" \
-        STUB_SYSTEMCTL_LOG="$D/systemctl.log" "$@"
+        STUB_SYSTEMCTL_LOG="$D/systemctl.log" DDNS_VERIFY_WAIT=0 "$@"
 }
 inst() { OUT=$(inst_env bash "$ROOT/install.sh" "$@" 2>&1); RC=$?; printf '%s\n' "$OUT" >> "$TMP/all-output.log"; }
 
@@ -613,6 +622,64 @@ NETCUP_ZONE="example.com" # quoted, then comment
 EOF
 run --force
 expect "config: comments after values are ignored" has "good netcup-rest"
+
+echo "== review fixes (state changes, filters, setup, install)"
+nonpub() { ( source "$ROOT/ddns-watch.sh"; is_nonpublic_ipv4 "$1" ); }
+expect "IPv4 filter: documentation nets are not public" eval 'nonpub 192.0.2.5 && nonpub 198.51.100.5 && nonpub 203.0.113.5 && nonpub 198.18.0.1 && nonpub 192.0.0.8'
+expect "  ... normal public addresses are" eval '! nonpub 81.2.69.142 && ! nonpub 1.1.1.1'
+mock_reset; new_case netcup
+printf '%s\n' '    inet6 2a03:4000:1::67c:16ff:fedf:a200/64 scope global tentative dynamic' \
+    '    inet6 2a03:4000:1::67c:16ff:fedf:a201/64 scope global dadfailed tentative' \
+    '    inet6 2001:db8:1::67c:16ff:fedf:a200/64 scope global dynamic' \
+    '    inet6 2a03:4000:1::1234/64 scope global dynamic mngtmpaddr' > "$D/ip6"
+run_v6
+expect "IPv6: tentative, dadfailed and 2001:db8::/32 are skipped" zone_has @ AAAA '["2a03:4000:1::1234"]'
+
+mock_reset; new_case netcup
+run
+echo 'NETCUP_TTL=600' >> "$D/etc/config"
+run
+expect "changed provider setting (TTL) forces an update although the IPs are the same" has "DNS settings changed"
+expect "  ... and netcup gets the new TTL" [ "$(mock_state '[.rest[] | select(.name=="@" and .type=="A") | .ttl]')" = '[600]' ]
+run
+expect "  ... next run: unchanged again" has "unchanged"
+mock_reset; new_case strato
+run
+echo 'STRATO_USER=example.com' >> "$D/etc/config"
+run
+expect "changed provider setting (strato) forces an update" has "DNS settings changed"
+
+mock_reset; new_case netcup; rm -f "$D/etc/config"
+run_setup netcup example.com RESTTOKEN lo "" "" "" n
+expect "setup cancelled at the summary: no secret stored" eval '[[ "$OUT" == *"Nothing was changed"* && ! -e "$D/store/netcup-api-key" && ! -e "$D/etc/config" ]]'
+mock_reset; new_case netcup; rm -f "$D/etc/config"
+run_setup netcup example.com WRONGKEY a
+expect "setup aborted after a failed login: no secret stored" [ ! -e "$D/store/netcup-api-key" ]
+mock_reset; new_case strato; rm -f "$D/etc/config"
+run_setup strato example.com "" 'p"a\ss' lo "" "" "" ""
+expect "setup with strato: does not claim 'Login OK'" eval '[[ "$OUT" == *"Login not checked"* && "$OUT" != *"Login OK"* ]]'
+
+mock_reset; new_case netcup
+run_store set-secret netcup-api-key <<< 'RESTTOKEN'
+run_store set-secret strato-password <<< 'old-strato-pass'
+expect "drop-in: active provider's key is loaded" grep -q '^LoadCredentialEncrypted=netcup-api-key:' "$D/units/ddns-watch.service.d/credentials.conf"
+expect "  ... other providers' keys are not given to the service" eval '! grep -q strato-password "$D/units/ddns-watch.service.d/credentials.conf"'
+
+mock_reset; new_case netcup
+printf '%s\n' "$V6_ADDRS" > "$D/ip6"
+( sleep 1.2; echo 'IPV6_SUFFIX=::5c1e:9b2:77a0:1' >> "$D/etc/config" ) &
+CHANGER=$!
+DDNS_WATCH_TICK=0.3 run_v6 watch
+wait "$CHANGER"   # only this job: a plain "wait" would also wait for the mock server
+expect "watcher restarts itself when a watched setting changes" has "configuration changed"
+expect "  ... and then uses it" zone_has @ AAAA '["2a03:4000:1::5c1e:9b2:77a0:1"]'
+
+new_case netcup; rm -rf "${D:?}/etc"
+inst --no-setup --yes
+STUB_ACTIVE=no inst --upgrade --yes
+expect "upgrade: service not running afterwards -> error, rc 1" eval '[[ "$RC" == 1 && "$OUT" == *"is not running after the update"* ]]'
+inst --upgrade --yes
+expect "upgrade: running service is confirmed" has "ddns-watch.service is running"
 
 echo "== plugin interface"
 plugin_lint() ( # plugin_lint NAME: source the core, load the plugin, check the rules from CONTRIBUTING.md

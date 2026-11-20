@@ -1,0 +1,10 @@
+# Dependabot proposes updates for the GitHub Actions used in the workflows (they are pinned to
+# commit SHAs, so updates do not happen silently).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "CI"

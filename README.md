@@ -7,14 +7,18 @@
 Keeps the `A` and `AAAA` record of one hostname pointing at your Linux machine, made for home
 servers with their **own public IPv6** (e.g. behind a FRITZ!Box with a daily reconnect).
 
-- **Reacts in seconds:** the kernel reports IPv6 changes, and ddns-watch updates the DNS record
-  right away. A reconnect usually changes the IPv6 prefix too, so the new IPv4 is picked up in the
-  same run. A timer catches changes of the IPv4 alone.
-- **Right address:** the stable IPv6 of the machine (no temporary privacy addresses); never a
-  private or carrier-NAT IPv4.
-- **Secrets encrypted** with `systemd-creds` (bound to the machine's TPM where available).
+- **Reacts in seconds:** the kernel reports IPv6 changes, and ddns-watch sends the update to your
+  provider right away. A reconnect usually changes the IPv6 prefix too, so the new IPv4 is picked up
+  in the same run; a timer catches changes of the IPv4 alone. (Resolvers that cached the old
+  address keep it until the record's TTL runs out, 5 minutes by default for netcup.)
+- **Right address:** the stable IPv6 of the machine (no temporary privacy, tentative or local-only
+  addresses); never a private, carrier-NAT or other special-purpose IPv4 (documentation and
+  benchmark ranges included).
+- **Secrets encrypted** with `systemd-creds` (bound to the machine's TPM where available): API keys,
+  passwords, and notification/heartbeat URLs entered in the setup.
 - **Hardened service:** own throw-away user, read-only system, syscall filter.
-- **Plugins** for DNS providers: netcup, Strato and any dyndns2 service (deSEC, Dynu, No-IP ...).
+- **Plugins** for DNS providers: netcup, Strato and dyndns2 services (tested with Strato; deSEC,
+  Dynu, No-IP and others use the same protocol and should work).
 - Retries, daily verification, optional notifications (ntfy, Gotify, Discord, Slack) and heartbeat
   ([guide](docs/notifications.md)).
 
@@ -26,21 +30,29 @@ Needs Linux with **systemd 250 or newer** (e.g. Ubuntu 24.04, Debian 12).
 curl -fsSL https://github.com/gitrys/ddns-watch/releases/latest/download/install.sh | sudo bash
 ```
 
-Nothing else is needed. The installer verifies the SHA256 checksum of the download; if the
-[GitHub CLI](https://cli.github.com/) (`gh`) happens to be installed, it also verifies the build
-attestation (optional). It installs missing packages after asking and starts the guided setup:
+Nothing else is needed. The installer installs missing packages after asking and starts the
+guided setup:
 
 1. DNS provider
 2. hostname
-3. login (stored encrypted)
-4. login test (read-only)
-5. network: interface, where the IPv4 comes from (detected for you)
+3. login, tested read-only where the provider allows it (netcup: yes; dyndns2/Strato have no such
+   call, the first update at the end shows whether the password is right)
+4. network interface (shows the IPv6 that would be published)
+5. where the IPv4 comes from (detected for you)
 6. notifications (optional)
 
-Nothing is changed before you confirm the summary. To read the installer first:
+Nothing is changed, and no secret is stored, before you confirm the summary.
+
+**What is verified:** the installer checks the SHA256 checksum of the release it downloads, and,
+if the [GitHub CLI](https://cli.github.com/) (`gh`) is installed, the GitHub build attestation
+(proof that the files were built by this repository's release workflow). The checksum alone only
+protects against broken downloads, since it comes from the same place. And with
+`curl ... | sudo bash` the installer script itself runs before anything is checked. The careful
+way: download it, verify it, read it, then run it:
 
 ```bash
 curl -fsSLO https://github.com/gitrys/ddns-watch/releases/latest/download/install.sh
+gh attestation verify install.sh --repo gitrys/ddns-watch   # optional, needs the GitHub CLI
 less install.sh
 sudo bash install.sh
 ```
@@ -62,8 +74,10 @@ sudo ddns-watch uninstall         # remove (--purge: also config and secrets)
 ddns-watch providers              # available provider plugins
 ```
 
-Only one hostname is updated. Make every other name a `CNAME` to it. (Several hostnames are on
-the [roadmap](ROADMAP.md).)
+Only one hostname is updated. Make other names `CNAME`s to it, e.g. `www.example.com` →
+`example.com`. (A CNAME is not allowed at the zone apex: if you update `home.example.com`,
+`example.com` itself cannot point to it with a CNAME.) Several hostnames are on the
+[roadmap](ROADMAP.md).
 
 ## Where things are
 
@@ -76,8 +90,11 @@ the [roadmap](ROADMAP.md).)
 | services | `ddns-watch.service` (watcher), `ddns-watch-ipv4.timer` (IPv4 check) |
 | log | `journalctl -u ddns-watch -u ddns-watch-ipv4` |
 
-The config is plain `KEY=value` and is never executed. It is read on every run; only a changed
-`IFACE` needs `sudo systemctl restart ddns-watch`.
+The config is plain `KEY=value` and is never executed. It is read on every run, so changes apply
+without a restart: a change of hostname, records or provider settings (zone, TTL ...) triggers an
+update even if the IPs are the same, and the watcher restarts itself within a minute when
+`IFACE`, `IPV4_SOURCE`, `RECORDS` or `IPV6_SUFFIX` change. After adding a secret by hand, run
+`sudo ddns-watch set-secret ...` (or the setup) so the service gets it.
 
 ## Providers
 
@@ -85,7 +102,7 @@ The config is plain `KEY=value` and is never executed. It is read on every run; 
 |---|---|---|
 | `netcup` | REST API (CloudDNS); legacy API as fallback | `netcup-api-key` (CCP → Stammdaten → API → API-Keys) |
 | `strato` | Strato DynDNS | `strato-password` (DynDNS password from the Strato login) |
-| `dyndns2` | any dyndns2 service: `DYNDNS2_URL` | `dyndns2-password` |
+| `dyndns2` | dyndns2 services: `DYNDNS2_URL` (https only) | `dyndns2-password` |
 
 For netcup only the A/AAAA records of the hostname are changed; every other record stays as it
 is. Want another provider? See [CONTRIBUTING.md](CONTRIBUTING.md): a plugin is one file.
@@ -101,6 +118,11 @@ is. Want another provider? See [CONTRIBUTING.md](CONTRIBUTING.md): a plugin is o
 
 `RECORDS=AAAA` publishes IPv6 only. Use it with **DS-Lite / carrier-grade NAT**: there the IPv4
 is shared and not reachable from outside (setup detects this).
+
+**Records are only set, never deleted:** if the machine has no usable IPv4 (or IPv6) for a while,
+the existing A (or AAAA) record is left as it is, so a short outage of the lookup does not take the
+name offline. The same applies when you switch to `RECORDS=AAAA` or `RECORDS=A`: remove the
+record that is no longer wanted by hand at your provider.
 
 ## Errors and notifications
 
@@ -118,6 +140,38 @@ is shared and not reachable from outside (setup detects this).
 
 **Step-by-step guide: [docs/notifications.md](docs/notifications.md)** (ntfy, Gotify, Discord, Slack,
 Healthchecks.io, Uptime Kuma).
+
+## Troubleshooting
+
+```bash
+ddns-watch status                          # settings, last good update, services, current error
+sudo ddns-watch status                     # same, plus whether the secrets can be decrypted
+sudo ddns-watch check                      # read-only: login, records at the provider, planned change
+journalctl -u ddns-watch -u ddns-watch-ipv4 -n 50 --no-pager
+dig +short AAAA home.example.com @1.1.1.1  # what the world sees ...
+ip -6 addr show scope global               # ... and what this machine has
+sudo ddns-watch run --force                # send the update now (also retries a stopped error)
+```
+
+- **"not retrying: ... rejected"**: the provider refused the key or the hostname. Fix it
+  (`sudo ddns-watch set-secret ...` or `sudo ddns-watch setup`); the next run tries again.
+- **"CANNOT DECRYPT"** in `sudo ddns-watch status`: see [Moving to new hardware](#moving-to-new-hardware).
+- **DNS shows the old address**: resolvers cache it for the record's TTL; check the provider's
+  name server directly, e.g. `dig AAAA home.example.com @<ns-of-your-provider>`.
+
+## DNS is right, but the server is not reachable?
+
+ddns-watch only makes the name point to the right address. Whether a connection gets through is
+decided elsewhere:
+
+- **Router firewall:** a FRITZ!Box blocks incoming IPv6 by default. Allow the ports for this
+  device under *Internet → Freigaben → Portfreigaben → Gerät für Freigaben hinzufügen* (IPv6 tab).
+  For IPv4 you need a port forwarding to the server.
+- **Firewall on the server** (ufw, nftables, the Docker rules ...) and a service that actually
+  listens on IPv6 (`ss -tlnp`).
+- **DS-Lite / carrier-grade NAT:** the IPv4 is shared with other customers and cannot be reached
+  from outside at all; only IPv6 works (use `RECORDS=AAAA`).
+- Test from outside your network (e.g. mobile data without Wi-Fi), not from the LAN.
 
 ## Moving to new hardware
 
@@ -150,10 +204,11 @@ provider. Settings of the old provider stay in the config and are ignored.
 tests/run.sh          # Linux; needs bash, python3, curl, jq, flock. Mock APIs, no network, no root.
 ```
 
-The tests run the real script against mock servers (netcup, Strato, router, release downloads)
-and stubs for `systemd-creds`, `systemctl`, `dig` and `ip`. CI runs shellcheck, the tests, a
-check of the systemd units and a secret scan. Releases: tag `vX.Y.Z` with a matching
-`CHANGELOG.md` section.
+The tests run the real script against mock servers (netcup, Strato, router, notification
+services, release downloads) and stubs for `systemd-creds`, `systemctl`, `dig` and `ip`. CI runs
+shellcheck, the tests, a check of the systemd units (syntax and a hardening threshold), the tools
+inside the units' real sandbox, a release build and a secret scan. A release (tag `vX.Y.Z` with a
+matching `CHANGELOG.md` section) runs the same CI first.
 
 ## About
 

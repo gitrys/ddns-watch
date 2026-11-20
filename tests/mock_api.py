@@ -6,7 +6,8 @@
   *    /v1/...                          netcup REST API (bearer key)
   POST /upnp/control                    router UPnP IGD GetExternalIPAddress (SOAP)
   POST /_reset   {"mode": "..."}        reset state; modes: normal, notfound, legacy, dupe, empty,
-                                        upnp-cgnat, upnp-down, down (all provider APIs answer 503)
+                                        upnp-cgnat, upnp-down, down (all provider APIs answer 503),
+                                        dyn500 (dyndns2 answers HTTP 500 with "good")
   POST /notify                          records notifications (title, priority, auth, text)
   POST /gotify/message                  Gotify API (X-Gotify-Key GOTKEY, JSON), records messages
   POST /discord/api/webhooks/123/SECRETHOOK   Discord webhook (JSON content), records messages
@@ -82,7 +83,7 @@ class H(BaseHTTPRequestHandler):
         if S["mode"] == "upnp-down" or "GetExternalIPAddress" not in self.headers.get("SOAPAction", "") \
                 or "GetExternalIPAddress" not in raw:
             return self.reply(500, "<error/>", "text/xml")
-        ip = "100.64.12.34" if S["mode"] == "upnp-cgnat" else "198.51.100.4"
+        ip = "100.64.12.34" if S["mode"] == "upnp-cgnat" else "81.2.69.142"
         xml = ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
                '<u:GetExternalIPAddressResponse xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">'
                f'<NewExternalIPAddress>{ip}</NewExternalIPAddress></u:GetExternalIPAddressResponse></s:Body></s:Envelope>')
@@ -149,6 +150,8 @@ class H(BaseHTTPRequestHandler):
 
     # ---- Strato dyndns2
     def strato(self, u):
+        if S["mode"] == "dyn500":
+            return self.reply(500, "good 81.2.69.1", "text/plain")
         auth = self.headers.get("Authorization", "")
         want = "Basic " + base64.b64encode(f"{STRATO_USER}:{STRATO_PASS}".encode()).decode()
         if auth != want:

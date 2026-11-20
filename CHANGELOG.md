@@ -3,6 +3,38 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - unreleased
+
+Fixes from an external code review.
+
+### Fixed
+- A changed hostname, records setting or provider setting (zone, TTL, user ...) now triggers an
+  update even if the IPs did not change (before: only at the daily verification).
+- The setup no longer stores anything before you confirm the summary: secrets wait in a private
+  memory-backed folder and are encrypted on "Apply"; cancelling changes nothing.
+- dyndns2/Strato: the setup no longer claims "Login OK" (dyndns2 has no read-only login check);
+  it says the first update will show it.
+- The watcher restarts itself within a minute when `IFACE`, `IPV4_SOURCE`, `RECORDS` or
+  `IPV6_SUFFIX` change (before: it kept watching the old way until restarted).
+- netcup REST: a changed `NETCUP_TTL` is applied even if the IP is unchanged.
+- Never published: IPv4 documentation and benchmark ranges (192.0.2.0/24, 198.51.100.0/24,
+  203.0.113.0/24, 198.18.0.0/15, 192.0.0.0/24); IPv6 addresses that are tentative or failed duplicate
+  address detection, the documentation prefix 2001:db8::/32 and anything outside 2000::/3.
+- dyndns2: success needs HTTP 2xx and a complete `good`/`nochg` answer; HTTP errors are reported.
+- CI: the hardening check could never fail (the shell ran without pipefail); a test now proves it
+  fails for a weak unit.
+- Upgrades check that the service is running afterwards and fail loudly if not.
+
+### Changed
+- dyndns2 requires an https update URL; `DYNDNS2_ALLOW_HTTP=yes` allows http for local tests.
+- The service only gets the secrets of the active provider (plus notification/heartbeat), not
+  those of providers used before.
+- Releases run the complete CI first (same checks as every push). GitHub Actions are pinned to
+  commit SHAs and updated by Dependabot.
+- README: precise wording (what is verified, what is encrypted, what the login test can do),
+  new sections Troubleshooting and "DNS is right, but the server is not reachable?".
+- `main` now says `1.4.0-dev` instead of `1.0.0-dev`.
+
 ## [1.3.0] - 2026-11-20
 
 ### Added

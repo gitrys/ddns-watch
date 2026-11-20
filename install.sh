@@ -17,7 +17,7 @@
 # Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
-VERSION="1.0.0-dev"   # set by the release workflow
+VERSION="1.4.0-dev"   # set by the release workflow
 REPO="gitrys/ddns-watch"
 RELEASE_BASE="${DDNS_RELEASE_BASE:-https://github.com/$REPO/releases/download}"
 PREFIX="${DDNS_PREFIX:-/usr/local}"
@@ -145,7 +145,7 @@ else
     SRC="$TMP/ddns-watch-$VERSION"
     [[ -f "$SRC/ddns-watch.sh" ]] || die "$name is not a ddns-watch release"
 fi
-new_version=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$SRC/ddns-watch.sh" | head -n 1)
+new_version=$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' "$SRC/ddns-watch.sh" | head -n 1)
 
 # ---------------------------------------------------------------- older installations
 
@@ -186,15 +186,31 @@ install -d -m 755 "$CONFIG_DIR"
 install -d -m 700 "$CONFIG_DIR/credentials"
 systemctl daemon-reload
 
+# restart_and_verify: restarts the watcher if it was enabled and checks that it really runs.
+# A silently dead updater would only be noticed at the next IP change.
+restart_and_verify() {
+    systemctl is-enabled --quiet ddns-watch.service 2>/dev/null || return 0
+    systemctl restart ddns-watch.service >/dev/null 2>&1 || true
+    sleep "${DDNS_VERIFY_WAIT:-3}"
+    if systemctl is-active --quiet ddns-watch.service 2>/dev/null; then
+        say "ddns-watch.service is running."
+        return 0
+    fi
+    printf 'ERROR: ddns-watch.service is not running after the update. Last log lines:\n' >&2
+    journalctl -u ddns-watch.service -n 15 --no-pager -o cat 2>/dev/null | sed 's/^/    /' >&2
+    printf 'Check: ddns-watch status / journalctl -u ddns-watch -n 50\n' >&2
+    return 1
+}
+
 if [[ "$UPGRADE" -eq 1 ]]; then
-    systemctl try-restart ddns-watch.service >/dev/null 2>&1 || true
+    restart_and_verify || exit 1
     say "Upgraded to ${new_version:-?}. Status: ddns-watch status"
     exit 0
 fi
 say "Installed."
 if [[ "$SETUP" -eq 1 ]]; then
     if [[ -f "$CONFIG_DIR/config" ]] && ! confirm "A configuration exists. Run the setup again?"; then
-        systemctl try-restart ddns-watch.service >/dev/null 2>&1 || true
+        restart_and_verify || exit 1
         say "Kept the existing configuration. Status: ddns-watch status"
         exit 0
     fi

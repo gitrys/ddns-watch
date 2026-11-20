@@ -1,22 +1,32 @@
 name: CI
 
+# Runs on every push and pull request, and is called by the release workflow (workflow_call),
+# so a release passes exactly the same checks.
 on:
   push:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
+
+# "shell: bash" makes GitHub run steps with -eo pipefail, so a failing command in a pipe fails
+# the step (the default shell has no pipefail).
+defaults:
+  run:
+    shell: bash
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned to commit SHAs; Dependabot (.github/dependabot.yml) proposes updates.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y shellcheck jq
+        run: sudo apt-get update && sudo apt-get install -y shellcheck jq dnsutils
 
       - name: shellcheck
         run: shellcheck -S warning -x ddns-watch.sh install.sh tests/run.sh tools/build-release.sh tools/sandbox-check.sh providers/*.sh
@@ -24,24 +34,31 @@ jobs:
       - name: Tests (mock APIs)
         run: tests/run.sh
 
-      - name: systemd units (syntax + hardening score must stay below 2.0)
+      - name: systemd units (syntax + hardening exposure must stay at or below 2.0)
         run: |
           sudo install -m 755 ddns-watch.sh /usr/local/bin/ddns-watch
           systemd-analyze verify --man=no systemd/ddns-watch.service systemd/ddns-watch-ipv4.service systemd/ddns-watch-ipv4.timer
           for u in systemd/ddns-watch.service systemd/ddns-watch-ipv4.service; do
+            # --threshold uses the internal 0-100 scale: 20 = exposure 2.0. A worse unit fails here.
             systemd-analyze security --offline=true --threshold=20 --no-pager "$u" | tail -n 1
           done
 
+      - name: The hardening check really fails for a weak unit
+        run: |
+          printf '[Service]\nExecStart=/bin/true\n' > /tmp/weak.service
+          if systemd-analyze security --offline=true --threshold=20 --no-pager /tmp/weak.service | tail -n 1; then
+            echo "the threshold check did not fail for an unhardened unit"; exit 1
+          fi
+
       - name: Tools work inside the real sandbox of the units
         run: |
-          sudo apt-get install -y dnsutils
           sudo tools/sandbox-check.sh systemd/ddns-watch.service
           sudo tools/sandbox-check.sh systemd/ddns-watch-ipv4.service
 
       - name: Release build works
-        run: tools/build-release.sh 0.0.0 /tmp/dist && tar -tzf /tmp/dist/ddns-watch-0.0.0.tar.gz | head -n 20
+        run: tools/build-release.sh 0.0.0 /tmp/dist && tar -tzf /tmp/dist/ddns-watch-0.0.0.tar.gz | head -n 30
 
       - name: Secret scan
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -29,9 +29,10 @@
 # Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
 # This program comes with ABSOLUTELY NO WARRANTY; see LICENSE (GNU GPL v3 or later).
 
-VERSION="1.0.0-dev"
+VERSION="1.4.0-dev"   # on main: the next version; releases set the real one
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 CONFIG_DIR="${CONFIGURATION_DIRECTORY:-${DDNS_CONFIG_DIR:-/etc/ddns-watch}}"
 CONFIG_FILE="$CONFIG_DIR/config"
 STATE_DIR="${STATE_DIRECTORY:-${DDNS_STATE_DIR:-/var/lib/ddns-watch}}"
@@ -55,6 +56,7 @@ else
 fi
 LOCAL_PROVIDERS_DIR="$CONFIG_DIR/providers.d"
 DEBOUNCE_SEC="${DDNS_DEBOUNCE:-8}"   # DDNS_DEBOUNCE only for tests
+WATCH_TICK="${DDNS_WATCH_TICK:-60}"   # seconds between config checks of the watcher (tests: shorter)
 FORCE=0
 USER_FORCE=0
 
@@ -100,7 +102,10 @@ cfg() {
 read_secret() {
     [[ "$1" =~ ^[a-z0-9-]+$ ]] || return 0
     local v
-    if [[ -n "$SECRETS_DIR" ]]; then
+    if [[ -n "${PENDING_SECRETS:-}" && -r "$PENDING_SECRETS/$1" ]]; then
+        # Entered in the running setup but not applied yet (memory-backed, deleted on exit).
+        v=$(< "$PENDING_SECRETS/$1")
+    elif [[ -n "$SECRETS_DIR" ]]; then
         [[ -r "$SECRETS_DIR/$1" ]] || return 0
         v=$(< "$SECRETS_DIR/$1")
     elif [[ -f "$CRED_STORE/$1" ]] && is_root; then
@@ -200,6 +205,7 @@ load_provider() {
     PROVIDER_NAME="" PROVIDER_TIER="" PROVIDER_MAINTAINER="" PROVIDER_DESCRIPTION=""
     PROVIDER_SETTINGS="" PROVIDER_SECRETS="" PROVIDER_MIN_INTERVAL="" PROVIDER_MAX_INTERVAL=""
     PROVIDER_ASK="-" PROVIDER_ASK_SECRETS="-"   # "-" = ask all settings / the first secret
+    PROVIDER_LOGIN_CHECK="yes"   # "no" = provider_check cannot verify the login (setup says so)
     declare -gA PROVIDER_HELP=()
     # shellcheck source=/dev/null
     source "$f"
@@ -407,6 +413,7 @@ load_state() {
     LAST_PROVIDER=""
     LAST_UPDATED=""
     LAST_CALLED=""
+    LAST_APPLIED=""
     if [[ -f "$STATE" ]]; then
         LAST_IPV4=$(sed -n 's/^IPV4=//p' "$STATE" | tail -n 1)
         LAST_IPV6=$(sed -n 's/^IPV6=//p' "$STATE" | tail -n 1)
@@ -414,14 +421,26 @@ load_state() {
         LAST_UPDATED=$(sed -n 's/^UPDATED=//p' "$STATE" | tail -n 1)
         LAST_CALLED=$(sed -n 's/^CALLED=//p' "$STATE" | tail -n 1)
         [[ "$LAST_CALLED" =~ ^[0-9]+$ ]] || LAST_CALLED=""
+        LAST_APPLIED=$(sed -n 's/^APPLIED=//p' "$STATE" | tail -n 1)
     fi
+}
+
+# A short hash of the settings that decide WHAT is written to DNS: provider, hostname, records and
+# the provider's own settings (zone, TTL, ...). A change forces an update even if the IPs did not
+# change. (Secrets are not part of it; see config_fingerprint for that.)
+dns_fingerprint() {
+    local k
+    {
+        printf '%s\n' "$PROVIDER" "$DDNS_HOSTNAME" "$RECORDS"
+        for k in $PROVIDER_SETTINGS; do printf '%s=%s\n' "$k" "$(cfg "$k")"; done
+    } | sha256sum | cut -c1-16
 }
 
 write_state() {
     local tmp
     tmp=$(mktemp "$STATE_DIR/last.XXXXXX") || { warn "cannot write $STATE"; return 0; }
-    printf 'IPV4=%s\nIPV6=%s\nPROVIDER=%s\nUPDATED=%s\nCALLED=%s\n' \
-        "$1" "$2" "$PROVIDER" "$(date -Iseconds)" "${3:-$(date +%s)}" > "$tmp"
+    printf 'IPV4=%s\nIPV6=%s\nPROVIDER=%s\nUPDATED=%s\nCALLED=%s\nAPPLIED=%s\n' \
+        "$1" "$2" "$PROVIDER" "$(date -Iseconds)" "${3:-$(date +%s)}" "$(dns_fingerprint)" > "$tmp"
     chmod 600 "$tmp"
     mv "$tmp" "$STATE"
 }
@@ -439,13 +458,17 @@ is_ipv4() {
 # True for addresses that must never be published: private, CGNAT (DS-Lite / carrier NAT),
 # loopback, link-local, "this network", multicast and reserved.
 is_nonpublic_ipv4() {
-    local a b
-    IFS=. read -r a b _ _ <<< "$1"
-    (( a == 0 || a == 10 || a == 127 || a >= 224 )) && return 0
-    (( a == 100 && b >= 64 && b <= 127 )) && return 0
-    (( a == 169 && b == 254 )) && return 0
-    (( a == 172 && b >= 16 && b <= 31 )) && return 0
-    (( a == 192 && b == 168 )) && return 0
+    local a b c
+    IFS=. read -r a b c _ <<< "$1"
+    (( a == 0 || a == 10 || a == 127 || a >= 224 )) && return 0      # this net, private, loopback, multicast/reserved
+    (( a == 100 && b >= 64 && b <= 127 )) && return 0                # shared address space (CGNAT, DS-Lite)
+    (( a == 169 && b == 254 )) && return 0                           # link-local
+    (( a == 172 && b >= 16 && b <= 31 )) && return 0                 # private
+    (( a == 192 && b == 168 )) && return 0                           # private
+    (( a == 192 && b == 0 && (c == 0 || c == 2) )) && return 0       # IETF protocol assignments, TEST-NET-1
+    (( a == 198 && (b == 18 || b == 19) )) && return 0               # benchmarking
+    (( a == 198 && b == 51 && c == 100 )) && return 0                # TEST-NET-2
+    (( a == 203 && b == 0 && c == 113 )) && return 0                 # TEST-NET-3
     return 1
 }
 
@@ -533,16 +556,16 @@ get_ipv6() {
         return 0
     fi
     local cands c x
-    # Stable global addresses only: no temporary (privacy), deprecated, ULA (fd..) or link-local.
+    # Stable, usable global unicast only: no temporary (privacy), deprecated, tentative (duplicate
+    # address detection still running) or dadfailed addresses; no ULA (fc00::/7), link-local,
+    # documentation prefix (2001:db8::/32) or anything outside 2000::/3.
     cands=$(ip -6 addr show dev "$IFACE" scope global 2>/dev/null | awk '
         /inet6 / {
-            addr = $2
+            addr = tolower($2)
             sub(/\/.*/, "", addr)
-            if ($0 ~ /deprecated/) next
-            if ($0 ~ /temporary/) next
-            if (addr ~ /^[Ff][CcDd]/) next
-            if (addr ~ /^[Ff][Ee][89AaBb]/) next
-            if (addr !~ /:/) next
+            if ($0 ~ /deprecated|temporary|tentative|dadfailed/) next
+            if (addr !~ /^[23]/) next
+            if (addr ~ /^2001:0?db8:/) next
             print addr
         }
     ')
@@ -631,19 +654,27 @@ check_systemd_version() {
     command -v systemd-creds >/dev/null 2>&1 || die "systemd-creds not found"
 }
 
-# One drop-in per unit that loads every stored secret.
+# One drop-in per unit that loads the stored secrets the service may need: those of the active
+# provider plus the notification/heartbeat ones. Keys of other providers (e.g. after switching)
+# are not given to the service. Without a readable config yet, all stored secrets are listed.
 write_cred_dropin() {
-    local unit dir tmp f name
+    local unit dir tmp f name wanted=""
+    wanted=$(
+        load_config >/dev/null 2>&1 || exit 0
+        # shellcheck disable=SC2086
+        printf ' %s ' $PROVIDER_SECRETS notify-token notify-url heartbeat-url
+    )
     for unit in $UNITS_WITH_SECRETS; do
         dir="$UNIT_DIR/$unit.d"
         mkdir -p "$dir" || die "cannot create $dir"
         tmp=$(mktemp "$dir/.credentials.XXXXXX") || die "cannot write to $dir"
         {
-            printf '# Written by "ddns-watch set-secret". Do not edit; run it again instead.\n[Service]\n'
+            printf '# Written by ddns-watch (setup / set-secret). Do not edit; run them again instead.\n[Service]\n'
             for f in "$CRED_STORE"/*; do
                 [[ -f "$f" ]] || continue
                 name="$(basename "$f")"
                 [[ "$name" =~ ^[a-z0-9-]+$ ]] || continue
+                [[ -z "$wanted" || "$wanted" == *" $name "* ]] || continue
                 printf 'LoadCredentialEncrypted=%s:%s\n' "$name" "$f"
             done
         } > "$tmp"
@@ -783,6 +814,9 @@ _update_once_locked() {
     if [[ -n "$LAST_PROVIDER" && "$LAST_PROVIDER" != "$PROVIDER" ]]; then
         FORCE=1
         why="provider changed $LAST_PROVIDER -> $PROVIDER"
+    elif [[ -f "$STATE" && "$LAST_APPLIED" != "$(dns_fingerprint)" ]]; then
+        FORCE=1
+        why="DNS settings changed (hostname, records or provider settings)"
     fi
 
     # Once a day (or the provider's maximum interval, if shorter) send the current addresses even if
@@ -1232,6 +1266,33 @@ show_iface_table() {
     fi
 }
 
+# Secrets entered in the setup are kept in a private, memory-backed folder until "Apply" (the login
+# test and the notification test read them from there), so cancelling changes nothing.
+pending_open() {
+    local base="${DDNS_PENDING_BASE:-/run}"
+    PENDING_SECRETS=$( (umask 077; mktemp -d "$base/ddns-watch-setup.XXXXXX") 2>/dev/null \
+        || (umask 077; mktemp -d) ) || die "cannot create a private temporary folder"
+    chmod 700 "$PENDING_SECRETS"
+}
+
+pending_secret() { # pending_secret NAME VALUE
+    (umask 077; printf '%s' "$2" > "$PENDING_SECRETS/$1") || die "cannot write to $PENDING_SECRETS"
+}
+
+pending_close() {
+    [[ -n "${PENDING_SECRETS:-}" && -d "$PENDING_SECRETS" ]] && rm -rf -- "${PENDING_SECRETS:?}"
+    PENDING_SECRETS=""
+}
+
+# Encrypts all pending secrets into the store (on "Apply").
+pending_commit() {
+    local f
+    for f in "$PENDING_SECRETS"/*; do
+        [[ -f "$f" ]] || continue
+        store_secret "$(basename "$f")" "$(< "$f")" || die "systemd-creds encrypt failed for $(basename "$f")"
+    done
+}
+
 # setup_url_secret KEY SECRET PROMPT: asks for a URL and stores it encrypted (config: KEY=secret).
 # Enter keeps a stored one, "none" removes it. Sets KEY to "secret" or "".
 setup_url_secret() {
@@ -1247,7 +1308,7 @@ setup_url_secret() {
         [[ "$REPLY_VALUE" =~ $URL_RE ]] && break
         s_info "That is not an http(s) URL. Enter = $def"
     done
-    store_secret "$secret" "$REPLY_VALUE" || die "systemd-creds encrypt failed"
+    pending_secret "$secret" "$REPLY_VALUE"
     REPLY_VALUE=""
     printf -v "$key" '%s' secret
     set_new "$key" secret
@@ -1319,7 +1380,8 @@ setup() {
     fi
     set_new() { [[ -v "NEW[$1]" ]] || NEW_KEYS+=("$1"); NEW[$1]="$2"; }
     SETUP_CHECK_LOG=$(mktemp) SETUP_RECORDS=$(mktemp)
-    trap 'rm -f "$SETUP_CHECK_LOG" "$SETUP_RECORDS"' EXIT
+    pending_open
+    trap 'rm -f "$SETUP_CHECK_LOG" "$SETUP_RECORDS"; pending_close' EXIT
 
     echo
     s_box "$S_C" "$(printf '%-*s%s' "$((60 - ${#VERSION} - 1))" "ddns-watch setup" "v$VERSION")" \
@@ -1399,7 +1461,7 @@ setup() {
                     continue
                 fi
             fi
-            store_secret "$s" "$REPLY_VALUE" || die "systemd-creds encrypt failed"
+            pending_secret "$s" "$REPLY_VALUE"
             REPLY_VALUE=""
             break
         done
@@ -1414,22 +1476,26 @@ setup() {
         ask "[r]e-enter the secret, [c]ontinue anyway, [a]bort" "r"
         case "${REPLY_VALUE,,}" in
             c*) login_ok=0; break ;;
-            a*) die "aborted; config unchanged (the secret entered above is stored)" ;;
+            a*) die "aborted; nothing was changed" ;;
         esac
         s="${ask_secrets%% *}"
         ask_secret "$s, hidden"
-        [[ -n "$REPLY_VALUE" ]] && { store_secret "$s" "$REPLY_VALUE" || die "systemd-creds encrypt failed"; }
+        [[ -n "$REPLY_VALUE" ]] && { pending_secret "$s" "$REPLY_VALUE"; }
         REPLY_VALUE=""
         s_info "Testing again ..."
     done
     if [[ "$login_ok" -eq 0 ]]; then
         s_warn "Continuing without a working login: updates will fail until it is fixed."
+    elif [[ "$PROVIDER_LOGIN_CHECK" == no ]]; then
+        # e.g. dyndns2: there is no read-only call that checks the password.
+        s_warn "Login not checked: $PROVIDER can only verify it by sending a real update."
+        s_info "  The first update at the end of the setup shows whether it works."
+        sed 's/^/      /' "$SETUP_CHECK_LOG" | head -n 8
     elif [[ -s "$SETUP_RECORDS" ]]; then
         s_ok "Login OK"
         echo
         setup_show_records
     else
-        # The plugin cannot list records (e.g. dyndns2): show its short check output instead.
         s_ok "Login OK"
         sed 's/^/      /' "$SETUP_CHECK_LOG" | head -n 8
     fi
@@ -1534,7 +1600,7 @@ setup() {
         case "$(notify_type)" in
             ntfy|gotify)
                 ask_secret "Access token (ntfy: protected topic, Gotify: app token), hidden ${S_D}[Enter = none / keep]${S_R}"
-                [[ -n "$REPLY_VALUE" ]] && { store_secret notify-token "$REPLY_VALUE" || die "systemd-creds encrypt failed"; }
+                [[ -n "$REPLY_VALUE" ]] && pending_secret notify-token "$REPLY_VALUE"
                 REPLY_VALUE=""
                 ;;
         esac
@@ -1579,10 +1645,13 @@ setup() {
         "$(printf '%-12s %s' Heartbeat "$([[ -n "$HEARTBEAT_URL" ]] && echo "URL encrypted" || echo none)")" \
         "$(printf '%-12s %s' Secrets "encrypted ($keyinfo)")"
     echo
-    ask_yes "Apply and start ddns-watch?" y || { echo; s_info "Cancelled. The config was not changed."; return 0; }
+    ask_yes "Apply and start ddns-watch?" y || { echo; s_info "Cancelled. Nothing was changed (config and secrets as before)."; return 0; }
 
     # ---- apply
     printf '\n %sApplying%s\n\n' "$S_B" "$S_R"
+    pending_commit
+    pending_close
+    s_ok "Secrets stored         ${S_D}encrypted in $CRED_STORE${S_R}"
     setup_write_config
     load_config || die "the new config does not load (see above); please report this as a bug"
     s_ok "Config written         ${S_D}$CONFIG_FILE${S_R}"
@@ -1859,7 +1928,8 @@ watch_loop() {
         exit 1
     fi
     exec 8>"$RUNTIME_DIR/watch.lock"
-    if ! flock -n 8; then
+    # Wait a little: after a self-restart the old process may still be on its way out.
+    if ! flock -w 5 8; then
         say "watch: another watcher is already running"
         exit 0
     fi
@@ -1878,21 +1948,51 @@ watch_loop() {
 
     # The kernel reports every address event, including privacy-address renewals and lifetime
     # refreshes (every few minutes). Only run the updater when an address we publish changed.
-    local seen now
+    # Every WATCH_TICK seconds without an event, check whether settings that decide WHAT we watch
+    # changed (IFACE, IPV4_SOURCE, RECORDS, IPV6_SUFFIX); if so, start over with the new config.
+    local seen now rc mon_pid watch_fp
     seen=$(local_addresses)
-    ip "${fam[@]}" monitor address dev "$IFACE" | while IFS= read -r _; do
-        while IFS= read -r -t "$DEBOUNCE_SEC" _; do
-            :
-        done
-        now=$(local_addresses)
-        [[ "$now" == "$seen" ]] && continue
-        say "watch: address changed ($(tr '\n' ' ' <<< "$now")), running updater"
-        seen="$now"
-        update_once || true
+    watch_fp=$(watch_fingerprint)
+    # (8>&-: the monitor must not inherit the watcher lock, or a restarted watcher finds it taken.)
+    exec 3< <(exec ip "${fam[@]}" monitor address dev "$IFACE" 8>&-)
+    mon_pid=$!
+    while true; do
+        if IFS= read -r -t "$WATCH_TICK" -u 3 _; then
+            while IFS= read -r -t "$DEBOUNCE_SEC" -u 3 _; do
+                :
+            done
+            now=$(local_addresses)
+            [[ "$now" == "$seen" ]] && continue
+            say "watch: address changed ($(tr '\n' ' ' <<< "$now")), running updater"
+            seen="$now"
+            update_once || true
+            continue
+        else
+            rc=$? # (here, not after "fi": after fi $? would be 0)
+        fi
+        if (( rc <= 128 )); then
+            break # end of input: ip monitor exited
+        fi
+        now=$(watch_fingerprint)
+        # (Empty = config unreadable right now, e.g. while being saved: try again next tick.)
+        if [[ -n "$now" && "$now" != "$watch_fp" ]]; then
+            say "watch: configuration changed (interface, IPv4 source, records or IPv6 suffix): restarting the watcher"
+            kill "$mon_pid" 2>/dev/null
+            exec 3<&- 8>&-
+            exec "$SELF" watch
+        fi
     done
 
     err "watch: ip monitor exited"
     return 1
+}
+
+# The settings the watcher itself depends on. Empty if the config cannot be read right now.
+watch_fingerprint() {
+    (
+        load_config >/dev/null 2>&1 || exit 0
+        printf '%s|%s|%s|%s\n' "$IFACE" "$IPV4_SOURCE" "$RECORDS" "$IPV6_SUFFIX"
+    )
 }
 
 main() {

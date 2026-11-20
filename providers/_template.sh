@@ -27,6 +27,10 @@ declare -gA PROVIDER_HELP=(                         # one short help text per se
     [example-api-token]="Example dashboard -> API tokens -> create a token with DNS edit rights."
 )
 
+# Optional: set to "no" if provider_check cannot verify the login without changing anything
+# (like dyndns2). The setup then says so instead of "Login OK".
+# PROVIDER_LOGIN_CHECK="no"
+
 # Optional: rate limits of the provider, in seconds.
 # PROVIDER_MIN_INTERVAL=60        # at most one update per minute
 # PROVIDER_MAX_INTERVAL=2592000   # the provider drops names not updated for 30 days: refresh before

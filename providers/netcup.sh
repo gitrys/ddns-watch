@@ -326,7 +326,7 @@ rest_plan() {
         | . as $recs
         | [ $want[] as $w
             | [ $recs[] | select(isname and .type == $w.type and (.immutable | not)) ] as $m
-            | if ($m | length) == 1 and $m[0].rdata == $w.ip then empty
+            | if ($m | length) == 1 and $m[0].rdata == $w.ip and (($m[0].ttl // $ttl) == $ttl) then empty
               else {
                 create: [{name: $host, type: $w.type, rdata: $w.ip, ttl: $ttl}],
                 delete: [ $m[] | {name: $host, type, rdata, ttl: (.ttl // $ttl)} ]
