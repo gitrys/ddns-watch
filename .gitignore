@@ -16,3 +16,6 @@ docs/plan-hardening.md
 /dist/
 tests/tmp/
 __pycache__/
+
+# Local mockups (not part of the project)
+mockups/
