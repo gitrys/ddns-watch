@@ -21,8 +21,9 @@ Needs Linux with **systemd 250 or newer** (e.g. Ubuntu 24.04, Debian 12).
 curl -fsSL https://github.com/gitrys/ddns-watch/releases/latest/download/install.sh | sudo bash
 ```
 
-The installer checks the download (SHA256; with the [GitHub CLI](https://cli.github.com/) also the
-build attestation), installs missing packages after asking, and starts the guided setup:
+Nothing else is needed. The installer verifies the SHA256 checksum of the download; if the
+[GitHub CLI](https://cli.github.com/) (`gh`) happens to be installed, it also verifies the build
+attestation (optional). It installs missing packages after asking and starts the guided setup:
 
 1. DNS provider
 2. hostname

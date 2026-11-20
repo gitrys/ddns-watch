@@ -199,6 +199,8 @@ if [[ "$SETUP" -eq 1 ]]; then
         exit 0
     fi
     say
+    cleanup          # exec skips the EXIT trap, so remove the download folder now
+    TMP=""
     exec "$PREFIX/bin/ddns-watch" setup
 fi
 say "Next: sudo ddns-watch setup"
