@@ -3,6 +3,19 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - unreleased
+
+### Added
+- **Gotify** notifications: JSON with title, message and priority (8 for rejected updates),
+  token as `X-Gotify-Key`. Detected by the `/message` URL, or set `NOTIFY_TYPE=gotify`.
+- `ddns-watch test-notify`: sends a test notification and a heartbeat ping and reports the result.
+- Setup step 6 explains both helpers, detects the notification type and offers a test.
+- Guide [docs/notifications.md](docs/notifications.md): ntfy (public and self-hosted), Gotify,
+  Healthchecks.io, Uptime Kuma; linked from README and setup.
+
+### Fixed
+- The setup listed Gotify as a target although only text POSTs were sent, which Gotify rejects.
+
 ## [1.1.0] - 2026-11-20
 
 ### Changed

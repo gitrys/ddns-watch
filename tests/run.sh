@@ -365,6 +365,34 @@ expect "once a day the record is verified even if unchanged" has "periodic verif
 run --force
 expect "run --force always calls the provider" has "(forced)"
 
+echo "== test-notify, Gotify"
+mock_reset; new_case netcup
+run_store test-notify
+expect "test-notify without URLs -> explains" has "neither NOTIFY_URL nor HEARTBEAT_URL"
+printf 'NOTIFY_URL=%s/notify\nHEARTBEAT_URL=%s/heartbeat\n' "$MOCK" "$MOCK" >> "$D/etc/config"
+run_store set-secret notify-token <<< 'NTFYTOKEN'
+run_store test-notify
+expect "test-notify (ntfy): message with bearer token" [ "$(mock_state '[.notify[] | select(.title=="ddns-watch test" and .auth=="Bearer NTFYTOKEN")] | length')" = 1 ]
+expect "  ... heartbeat pinged" eval '[[ "$OUT" == *"heartbeat ping: OK"* ]] && [ "$(mock_state .heartbeat)" = 1 ]'
+mock_reset; new_case netcup
+echo "NOTIFY_URL=$MOCK/gotify/message" >> "$D/etc/config"
+run_store set-secret notify-token <<< 'GOTKEY'
+run_store test-notify
+expect "Gotify detected by /message: JSON with X-Gotify-Key" eval '[[ "$OUT" == *"(gotify)"* && "$RC" == 0 ]]'
+expect "  ... title, message, priority 5" [ "$(mock_state '[.gotify[] | select(.title=="ddns-watch test" and .priority==5 and (.message | test("notifications work")))] | length')" = 1 ]
+run_store set-secret notify-token <<< 'WRONG'
+run_store test-notify
+expect "Gotify with wrong token -> test-notify fails, rc 1" eval '[[ "$OUT" == *"could not send"* && "$RC" == 1 ]]'
+mock_reset; new_case strato
+printf 'NOTIFY_URL=%s/gotify/message\n' "$MOCK" >> "$D/etc/config"
+printf '%s' 'GOTKEY' > "$D/creds/notify-token"
+printf 'wrong' > "$D/creds/strato-password"
+run
+expect "permanent error via Gotify -> priority 8" [ "$(mock_state '[.gotify[] | select(.title=="DNS update rejected" and .priority==8)] | length')" = 1 ]
+new_case netcup; echo 'NOTIFY_TYPE=slack' >> "$D/etc/config"
+run
+expect "unknown NOTIFY_TYPE rejected" has "must be auto, ntfy or gotify"
+
 echo "== IPv6 selection and watcher filter"
 run_v6() {
     OUT=$(env -u DDNS_TEST_IPV6 PATH="$SRC:$PATH" STUB_IP6_FILE="$D/ip6" DDNS_DEBOUNCE=0.2 \
@@ -415,13 +443,14 @@ run_setup() {
 conf_has() { grep -qx "$1" "$D/etc/config"; }
 
 mock_reset; new_case netcup; rm -f "$D/etc/config"
-run_setup netcup example.com RESTTOKEN lo "" "$MOCK/notify" "" "" ""
+run_setup netcup example.com RESTTOKEN lo "" "$MOCK/notify" "" "" "" ""
 [[ -n "${SHOW_SETUP:-}" ]] && printf '%s\n' "$OUT"   # SHOW_SETUP=1 tests/run.sh: see the dialog
 expect "setup: fresh install completes" eval '[[ "$OUT" == *"Config written"* && "$OUT" == *"Services started"* ]]'
 expect "  ... login tested against the provider" has "Login OK"
 expect "  ... records shown compactly (A, CNAMEs in one line)" eval '[[ "$OUT" == *"Current records for example.com"* && "$OUT" == *"CNAME  www"* ]]'
 expect "  ... progress bar and summary box" eval '[[ "$OUT" == *"Step 6 of 6"* && "$OUT" == *"Summary"* ]]'
 expect "  ... first check ok -> 'ddns-watch is running.'" has "ddns-watch is running."
+expect "  ... notification type detected, test sent" eval '[[ "$OUT" == *"Test notification sent"* ]] && [ "$(mock_state "[.notify[] | select(.title==\"ddns-watch test\")] | length")" = 1 ]'
 expect "  ... config written" eval 'conf_has PROVIDER=netcup && conf_has HOSTNAME=example.com && conf_has IFACE=lo'
 expect "  ... IPv4 source suggested: dns (no router answer)" eval 'conf_has IPV4_SOURCE=dns && conf_has IPV4_INTERVAL=300'
 expect "  ... notifications" conf_has "NOTIFY_URL=$MOCK/notify"
@@ -580,7 +609,7 @@ for f in "$ROOT"/providers/[a-z0-9]*.sh; do
 done
 
 echo "== secrets"
-LEAK=$(grep -nE "RESTTOKEN|LEG'PASS|LEGKEY|p\"a" "$TMP/all-output.log" || true)
+LEAK=$(grep -nE "RESTTOKEN|LEG'PASS|LEGKEY|p\"a|NTFYTOKEN|GOTKEY" "$TMP/all-output.log" || true)
 expect "no secret in any output" [ -z "$LEAK" ]
 
 echo

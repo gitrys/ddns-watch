@@ -75,6 +75,7 @@ Usage: ddns-watch [run] [--force]     update the DNS record if the IPs changed
        ddns-watch providers           list the available provider plugins
        ddns-watch secrets             show which secrets are stored and readable (root)
        ddns-watch set-secret NAME     store a secret encrypted with systemd-creds (root)
+       ddns-watch test-notify         send a test notification and heartbeat now (root)
        ddns-watch setup               guided setup: provider, hostname, login, network (root)
        ddns-watch status              show settings, last update, services and secrets
        ddns-watch update [--yes]      install the newest release (checksum-verified, config kept)
@@ -228,7 +229,7 @@ other_provider_key() {
 
 # ---------------------------------------------------------------- config
 
-CORE_KEYS=" IFACE PROVIDER HOSTNAME RECORDS IPV4_SOURCE IPV4_FALLBACK UPNP_URL IPV4_COMMAND IPV6_SUFFIX NOTIFY_URL NOTIFY_AFTER HEARTBEAT_URL IPV4_INTERVAL "
+CORE_KEYS=" IFACE PROVIDER HOSTNAME RECORDS IPV4_SOURCE IPV4_FALLBACK UPNP_URL IPV4_COMMAND IPV6_SUFFIX NOTIFY_URL NOTIFY_TYPE NOTIFY_AFTER HEARTBEAT_URL IPV4_INTERVAL "
 
 # parse_config -> associative array CFG. Nothing is expanded or executed.
 parse_config() {
@@ -340,6 +341,12 @@ load_config() {
             return 1
         fi
     done
+    NOTIFY_TYPE="${CFG[NOTIFY_TYPE]:-auto}"
+    NOTIFY_TYPE="${NOTIFY_TYPE,,}"
+    case "$NOTIFY_TYPE" in
+        auto|ntfy|gotify) ;;
+        *) err "NOTIFY_TYPE=$NOTIFY_TYPE in $CONFIG_FILE must be auto, ntfy or gotify"; return 1 ;;
+    esac
     NOTIFY_AFTER="${CFG[NOTIFY_AFTER]:-15}"
     if [[ ! "$NOTIFY_AFTER" =~ ^[0-9]{1,5}$ ]]; then
         err "NOTIFY_AFTER=$NOTIFY_AFTER in $CONFIG_FILE must be minutes (a number)"
@@ -903,21 +910,59 @@ clear_failure() {
     rm -f "$FAILURE"
 }
 
-# notify TITLE PRIORITY TAGS MESSAGE: POSTs the message to NOTIFY_URL (ntfy-compatible headers,
-# works with any webhook that takes a text body). Optional secret notify-token as bearer token.
+# notify_type -> ntfy | gotify. NOTIFY_TYPE=auto (default) detects Gotify by its /message endpoint.
+notify_type() {
+    case "${NOTIFY_TYPE:-auto}" in
+        ntfy|gotify) printf '%s\n' "$NOTIFY_TYPE" ;;
+        *) if [[ "$NOTIFY_URL" =~ /message(\?|$) ]]; then echo gotify; else echo ntfy; fi ;;
+    esac
+}
+
+json_escape() {
+    local s="${1//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "${s//$'\r'/}"
+}
+
+# notify TITLE PRIORITY(default|high) TAGS MESSAGE: sends the message to NOTIFY_URL.
+#   ntfy (and any webhook that takes a text body): text POST, ntfy headers Title/Priority/Tags,
+#        optional secret notify-token as "Authorization: Bearer".
+#   gotify: JSON {title, message, priority} to .../message, token as "X-Gotify-Key" (secret
+#        notify-token) or as ?token=... in the URL.
+# The token goes to curl on stdin, never on the command line.
 notify() {
     [[ -n "$NOTIFY_URL" ]] || return 1
-    local token
+    local token auth="" ok=1
     token=$(read_secret notify-token)
-    if { [[ -n "$token" ]] && printf 'header = "Authorization: Bearer %s"\n' "$(curl_cfg_escape "$token")"; } \
-        | curl --silent --show-error --fail --max-time 15 -K - \
-            -H "Title: $1" -H "Priority: $2" -H "Tags: $3" -H 'Content-Type: text/plain; charset=utf-8' \
-            --data-binary "$4" "$NOTIFY_URL" >/dev/null 2>&1; then
-        say "notification sent: $1"
+    case "$(notify_type)" in
+        gotify)
+            [[ -n "$token" ]] && auth=$(printf 'header = "X-Gotify-Key: %s"' "$(curl_cfg_escape "$token")")
+            local prio=5
+            [[ "$2" == high ]] && prio=8
+            printf '%s\n' "$auth" | curl --silent --show-error --fail --max-time 15 -K - \
+                -H 'Content-Type: application/json' \
+                --data-binary "{\"title\":\"$(json_escape "$1")\",\"message\":\"$(json_escape "$4")\",\"priority\":$prio}" \
+                "$NOTIFY_URL" >/dev/null 2>&1 && ok=0
+            ;;
+        *)
+            [[ -n "$token" ]] && auth=$(printf 'header = "Authorization: Bearer %s"' "$(curl_cfg_escape "$token")")
+            printf '%s\n' "$auth" | curl --silent --show-error --fail --max-time 15 -K - \
+                -H "Title: $1" -H "Priority: $2" -H "Tags: $3" -H 'Content-Type: text/plain; charset=utf-8' \
+                --data-binary "$4" "$NOTIFY_URL" >/dev/null 2>&1 && ok=0
+            ;;
+    esac
+    if [[ "$ok" -eq 0 ]]; then
+        say "notification sent ($(notify_type)): $1"
         return 0
     fi
-    warn "could not send the notification to NOTIFY_URL"
+    warn "could not send the notification to NOTIFY_URL ($(notify_type))"
     return 1
+}
+
+heartbeat_ping() {
+    curl --silent --fail --max-time 10 -o /dev/null "$HEARTBEAT_URL" 2>/dev/null
 }
 
 # Pings HEARTBEAT_URL after a good run (at most once a minute). If the pings stop, the external
@@ -929,11 +974,34 @@ heartbeat() {
     [[ -f "$HEARTBEAT_STAMP" ]] && last=$(< "$HEARTBEAT_STAMP")
     [[ "$last" =~ ^[0-9]+$ ]] || last=0
     (( now - last >= 60 )) || return 0
-    if curl --silent --fail --max-time 10 -o /dev/null "$HEARTBEAT_URL" 2>/dev/null; then
+    if heartbeat_ping; then
         printf '%s\n' "$now" > "$HEARTBEAT_STAMP"
     else
         warn "heartbeat to HEARTBEAT_URL failed"
     fi
+}
+
+# test-notify: sends a test notification and a heartbeat ping now and reports the result.
+test_notify() {
+    local rc=0
+    is_root || die "test-notify must run as root (it reads the encrypted token): sudo ddns-watch test-notify"
+    load_config || exit 1
+    if [[ -z "$NOTIFY_URL" && -z "$HEARTBEAT_URL" ]]; then
+        die "neither NOTIFY_URL nor HEARTBEAT_URL is set (sudo ddns-watch setup, or see docs/notifications.md)"
+    fi
+    if [[ -n "$NOTIFY_URL" ]]; then
+        notify "ddns-watch test" default "white_check_mark" \
+            "Test message from ddns-watch on $(hostname) for $DDNS_HOSTNAME. If you can read this, notifications work." \
+            || rc=1
+    else
+        say "notification: not configured (NOTIFY_URL)"
+    fi
+    if [[ -n "$HEARTBEAT_URL" ]]; then
+        if heartbeat_ping; then say "heartbeat ping: OK"; else err "heartbeat ping to HEARTBEAT_URL failed"; rc=1; fi
+    else
+        say "heartbeat: not configured (HEARTBEAT_URL)"
+    fi
+    return "$rc"
 }
 
 check_provider() {
@@ -1384,23 +1452,46 @@ setup() {
 
     # ---- 6 notifications
     step 6 "Notifications ${S_D}(optional)${S_R}"
-    s_info "Get a message when updates keep failing (ntfy, Gotify, any webhook)."
+    s_info "Two optional helpers; Enter skips them. Step-by-step guide: $NOTIFY_GUIDE"
     echo
+    printf '  %sMessage when updates keep failing%s\n' "$S_B" "$S_R"
+    s_info "ntfy: https://ntfy.sh/<long-secret-topic> (phone app \"ntfy\") or your own ntfy server."
+    s_info "Gotify: https://gotify.example.com/message (token below)."
     ask "Notification URL" "${OLD[NOTIFY_URL]:-none}"
     [[ "$REPLY_VALUE" == none ]] && REPLY_VALUE=""
-    if [[ -n "$REPLY_VALUE" ]]; then
-        set_new NOTIFY_URL "$REPLY_VALUE"
-        ask_secret "Access token for it, hidden ${S_D}[Enter = none / keep]${S_R}"
+    NOTIFY_URL="$REPLY_VALUE" NOTIFY_TYPE="${OLD[NOTIFY_TYPE]:-auto}"
+    if [[ -n "$NOTIFY_URL" ]]; then
+        set_new NOTIFY_URL "$NOTIFY_URL"
+        s_ok "$(notify_type)"
+        ask_secret "Access token (ntfy: protected topic, Gotify: app token), hidden ${S_D}[Enter = none / keep]${S_R}"
         [[ -n "$REPLY_VALUE" ]] && { store_secret notify-token "$REPLY_VALUE" || die "systemd-creds encrypt failed"; }
         REPLY_VALUE=""
     else
         set_new NOTIFY_URL ""
         s_info "  skipped"
     fi
-    ask "Heartbeat URL (Healthchecks, Uptime Kuma)" "${OLD[HEARTBEAT_URL]:-none}"
+    echo
+    printf '  %sHeartbeat: alarm when this machine goes quiet%s\n' "$S_B" "$S_R"
+    s_info "A URL called after every good run. If the calls stop, that service warns you, e.g. a"
+    s_info "Healthchecks.io check (period 5 min) or an Uptime Kuma push monitor."
+    ask "Heartbeat URL" "${OLD[HEARTBEAT_URL]:-none}"
     [[ "$REPLY_VALUE" == none ]] && REPLY_VALUE=""
-    set_new HEARTBEAT_URL "$REPLY_VALUE"
-    [[ -z "$REPLY_VALUE" ]] && s_info "  skipped"
+    HEARTBEAT_URL="$REPLY_VALUE"
+    set_new HEARTBEAT_URL "$HEARTBEAT_URL"
+    [[ -z "$HEARTBEAT_URL" ]] && s_info "  skipped"
+    if [[ -n "$NOTIFY_URL$HEARTBEAT_URL" ]] && ask_yes "Send a test now?" y; then
+        if [[ -n "$NOTIFY_URL" ]]; then
+            if notify "ddns-watch test" default "white_check_mark" \
+                "Test message from the ddns-watch setup on $(hostname). Notifications work." >/dev/null 2>&1; then
+                s_ok "Test notification sent  ${S_D}(check your phone / Gotify)${S_R}"
+            else
+                s_bad "Test notification failed: check the URL and the token (sudo ddns-watch test-notify later)"
+            fi
+        fi
+        if [[ -n "$HEARTBEAT_URL" ]]; then
+            if heartbeat_ping; then s_ok "Heartbeat ping OK"; else s_bad "Heartbeat ping failed: check the URL"; fi
+        fi
+    fi
 
     # ---- summary
     local keyinfo="host key" rec_txt="A + AAAA" v4_txt
@@ -1614,6 +1705,7 @@ uninstall() {
 REPO="gitrys/ddns-watch"
 RELEASE_BASE="${DDNS_RELEASE_BASE:-https://github.com/$REPO/releases/download}"
 RELEASE_API="${DDNS_RELEASE_API:-https://api.github.com/repos/$REPO/releases/latest}"
+NOTIFY_GUIDE="https://github.com/$REPO/blob/main/docs/notifications.md"
 
 # latest_version -> newest release version (without "v"), empty if unknown. Cached for a day.
 latest_version() {
@@ -1767,6 +1859,9 @@ main() {
             ;;
         status)
             show_status
+            ;;
+        test-notify)
+            test_notify
             ;;
         update)
             self_update "${2:-}"

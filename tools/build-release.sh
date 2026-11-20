@@ -20,6 +20,9 @@ mkdir -p "$stage/$d" "$out"
 for f in ddns-watch.sh install.sh providers systemd LICENSE README.md CHANGELOG.md CONTRIBUTING.md ROADMAP.md config.example; do
     cp -r "$root/$f" "$stage/$d/"
 done
+# Only the published docs (docs/ may hold local, unpublished notes).
+mkdir -p "$stage/$d/docs"
+cp "$root/docs/notifications.md" "$stage/$d/docs/"
 sed -i "s/^VERSION=\"[^\"]*\"/VERSION=\"$ver\"/" "$stage/$d/ddns-watch.sh" "$stage/$d/install.sh"
 grep -q "^VERSION=\"$ver\"" "$stage/$d/ddns-watch.sh" || { echo "could not set the version" >&2; exit 1; }
 chmod 755 "$stage/$d/ddns-watch.sh" "$stage/$d/install.sh"

@@ -15,7 +15,8 @@ servers with their **own public IPv6** (e.g. behind a FRITZ!Box with a daily rec
 - **Secrets encrypted** with `systemd-creds` (bound to the machine's TPM where available).
 - **Hardened service:** own throw-away user, read-only system, syscall filter.
 - **Plugins** for DNS providers: netcup, Strato and any dyndns2 service (deSEC, Dynu, No-IP ...).
-- Retries, daily verification, optional notifications (ntfy & co.) and heartbeat.
+- Retries, daily verification, optional notifications (ntfy, Gotify) and heartbeat
+  ([guide](docs/notifications.md)).
 
 ## Install
 
@@ -55,6 +56,7 @@ sudo ddns-watch run --force       # update now
 journalctl -u ddns-watch -f       # log
 sudo ddns-watch setup             # change settings (guided)
 sudo ddns-watch set-secret NAME   # change a key/password (e.g. netcup-api-key)
+sudo ddns-watch test-notify       # send a test notification and heartbeat
 sudo ddns-watch update            # install the newest release
 sudo ddns-watch uninstall         # remove (--purge: also config and secrets)
 ddns-watch providers              # available provider plugins
@@ -107,10 +109,15 @@ is shared and not reachable from outside (setup detects this).
 - A **temporary** error (provider down, no network) is retried after 1, 2, 5, then every 10
   minutes; notification after `NOTIFY_AFTER` minutes (default 15), and again when it works.
 - Once a day the current addresses are sent even without a change (fixes records changed by hand).
-- `NOTIFY_URL`: any URL that takes a text POST; headers are ntfy-compatible. Optional token:
-  `sudo ddns-watch set-secret notify-token`.
-- `HEARTBEAT_URL`: called after every good run (Healthchecks, Uptime Kuma push). When the calls
-  stop, that service tells you the machine or the service is down.
+- **Notification** (`NOTIFY_URL`, optional): a message to your phone when updates keep failing,
+  via **ntfy** (no account needed) or **Gotify**.
+- **Heartbeat** (`HEARTBEAT_URL`, optional): a URL called after every good run, e.g. a
+  Healthchecks.io check or an Uptime Kuma push monitor. When the calls stop, that service tells
+  you the machine or the service is down.
+- Test both: `sudo ddns-watch test-notify`.
+
+**Step-by-step guide: [docs/notifications.md](docs/notifications.md)** (ntfy, Gotify,
+Healthchecks.io, Uptime Kuma).
 
 ## Moving to new hardware
 
