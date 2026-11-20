@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # PROVIDER_* metadata and results are read by ddns-watch
 # ddns-watch provider plugin: any service that speaks the dyndns2 update protocol
 # (GET <url>?hostname=...&myip=... with HTTP basic auth; answers "good" / "nochg" / an error word).
 # Examples: deSEC, Dynu, No-IP and many registrars. Strato builds on this (providers/strato.sh).
@@ -10,7 +11,7 @@ PROVIDER_MAINTAINER="gitrys"
 PROVIDER_DESCRIPTION="any dyndns2-compatible service (update URL + user + password)"
 PROVIDER_SETTINGS="DYNDNS2_URL DYNDNS2_USER"
 PROVIDER_SECRETS="dyndns2-password"
-PROVIDER_HELP=(
+declare -gA PROVIDER_HELP=(
     [DYNDNS2_URL]="The provider's update URL without parameters, e.g. https://update.dedyn.io/nic/update (see your provider's DynDNS help page)."
     [DYNDNS2_USER]="DynDNS user name. Often the hostname itself (default)."
     [dyndns2-password]="DynDNS password or token from your provider's DynDNS settings."

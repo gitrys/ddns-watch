@@ -959,7 +959,7 @@ show_providers() {
     while IFS= read -r n; do
         (
             load_provider "$n" 2>/dev/null || { printf '%-12s (broken plugin)\n' "$n"; exit 0; }
-            printf '%-12s %-9s %s\n' "$n" "$PROVIDER_TIER" "$PROVIDER_DESCRIPTION"
+            printf '%-12s %-9s %s  (maintainer: %s)\n' "$n" "$PROVIDER_TIER" "$PROVIDER_DESCRIPTION" "$PROVIDER_MAINTAINER"
         )
     done < <(list_providers)
 }

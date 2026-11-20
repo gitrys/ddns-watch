@@ -244,6 +244,7 @@ esac
 exit 0
 EOF
 chmod +x "$SRC/dig" "$SRC/ip"
+# shellcheck disable=SC2120  # called with and without arguments
 run_src() {
     OUT=$(env -u DDNS_TEST_IPV4 PATH="$SRC:$PATH" DDNS_CONFIG_DIR="$D/etc" DDNS_CREDENTIALS_DIR="$D/creds" \
         DDNS_STATE_DIR="$D/state" DDNS_RUNTIME_DIR="$D/run" "$ROOT/ddns-watch.sh" "$@" 2>&1)
@@ -453,7 +454,7 @@ inst_env() {
 }
 inst() { OUT=$(inst_env bash "$ROOT/install.sh" "$@" 2>&1); RC=$?; printf '%s\n' "$OUT" >> "$TMP/all-output.log"; }
 
-new_case netcup; rm -rf "$D/etc"
+new_case netcup; rm -rf "${D:?}/etc"
 mkdir -p "$D/units"
 printf '[Service]\nExecStart=/home/me/dyndnsrefined/dyndnsrefined.sh watch\n' > "$D/units/ddns-watch.service"
 printf '[Timer]\n' > "$D/units/ddns-ipv4.timer"

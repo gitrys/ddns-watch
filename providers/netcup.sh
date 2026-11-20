@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # PROVIDER_* metadata and results are read by ddns-watch
 # ddns-watch provider plugin: netcup DNS (REST API "CloudDNS"; legacy CCP JSON API as fallback).
 # Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -11,7 +12,7 @@ PROVIDER_SECRETS="netcup-api-key netcup-legacy-key netcup-legacy-password"
 # setup asks only for the REST key; the zone and the legacy API are rarely needed (see PROVIDER_HELP).
 PROVIDER_ASK=""
 PROVIDER_ASK_SECRETS="netcup-api-key"
-PROVIDER_HELP=(
+declare -gA PROVIDER_HELP=(
     [NETCUP_API]="Which netcup API to use: auto (default: REST, legacy only if the domain is still on netcup's old DNS), rest or legacy."
     [NETCUP_ZONE]="Domain as it is named at netcup. Leave empty; only needed for multi-part TLDs (home.example.co.uk -> example.co.uk)."
     [NETCUP_CUSTOMER]="Legacy API only: your netcup customer number (digits)."

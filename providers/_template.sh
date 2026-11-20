@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # PROVIDER_* metadata and results are read by ddns-watch
 # ddns-watch provider plugin TEMPLATE. Copy to providers/<name>.sh and fill in.
 # Files starting with "_" are never loaded. See CONTRIBUTING.md for the rules.
 # Copyright (C) <year> <your name>. SPDX-License-Identifier: GPL-3.0-or-later
@@ -21,7 +22,7 @@ PROVIDER_MAINTAINER="your-github-name"
 PROVIDER_DESCRIPTION="Example DNS (one line)"
 PROVIDER_SETTINGS="EXAMPLE_ZONE"        # config keys; every key starts with the upper-case name + "_"
 PROVIDER_SECRETS="example-api-token"    # secret names: [a-z0-9-], start with the plugin name
-PROVIDER_HELP=(                         # one short help text per setting and secret (shown by the installer)
+declare -gA PROVIDER_HELP=(                         # one short help text per setting and secret (shown by the installer)
     [EXAMPLE_ZONE]="Zone at Example DNS. Leave empty to use the last two labels of the hostname."
     [example-api-token]="Example dashboard -> API tokens -> create a token with DNS edit rights."
 )
