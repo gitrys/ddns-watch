@@ -21,7 +21,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck jq
 
       - name: shellcheck
-        run: shellcheck -S warning -x ddns-watch.sh install.sh tests/run.sh tools/build-release.sh providers/*.sh
+        run: shellcheck -S warning -x ddns-watch.sh install.sh tests/run.sh tools/build-release.sh tools/sandbox-check.sh providers/*.sh
 
       - name: Tests
         run: tests/run.sh

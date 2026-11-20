@@ -3,6 +3,18 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-11-20
+
+### Fixed
+- The service could not read any address: the syscall filter blocked `capset()`, which `ip`
+  (iproute2) calls at start to drop its capabilities, so `ip` failed and the watcher restarted
+  every 30 s. `capget`/`capset` are allowed again; with an empty capability bounding set they can
+  only drop privileges.
+
+### Added
+- `tools/sandbox-check.sh`: runs `ip`, `dig`, `curl`, `jq` and `flock` under the real sandbox of
+  the units (CI runs it with root; `--user` works without root).
+
 ## [1.0.0] - 2026-11-20
 
 First release of the new structure. Not compatible with the earlier single-folder version:

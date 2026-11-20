@@ -57,6 +57,9 @@ RemoveIPC=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# "ip" (iproute2) drops its capabilities at start with capset() and fails without it. With an
+# empty CapabilityBoundingSet= there is nothing to gain: capset can only drop.
+SystemCallFilter=capget capset
 SystemCallErrorNumber=EPERM
 DevicePolicy=closed
 
