@@ -255,7 +255,7 @@ rest_call() {
     if [[ -n "${3:-}" ]]; then
         args+=(-H 'Content-Type: application/json' --data-binary "$3")
     fi
-    if ! out=$(printf 'header = "Authorization: Bearer %s"\n' "$NETCUP_TOKEN" \
+    if ! out=$(printf 'header = "Authorization: Bearer %s"\n' "$(curl_cfg_escape "$NETCUP_TOKEN")" \
             | curl "${args[@]}" "$NETCUP_REST_BASE$2" 2>&1); then
         REST_ERR="$1 $2: $out"
         return 1

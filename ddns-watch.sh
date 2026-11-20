@@ -653,7 +653,7 @@ set_secret() {
 
     if [[ -t 0 ]]; then
         [[ -n "$help" ]] && say "$name ($provider): $help"
-        read -r -s -p "Enter $name (input hidden, Enter = cancel): " value
+        IFS= read -r -s -p "Enter $name (input hidden, Enter = cancel): " value
         printf '\n' >&2
     else
         IFS= read -r value || true

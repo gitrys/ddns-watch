@@ -99,6 +99,11 @@ printf 'WRONG' > "$D/creds/netcup-api-key"
 mock_reset; run check netcup
 expect "check: wrong key reported" has "REJECTED"
 
+mock_reset; new_case netcup
+printf '%s' 'R"E\S T$&!%' > "$D/creds/netcup-api-key"
+run
+expect "REST key with quote, backslash, space, \$&!% works (no escaping needed)" has "good netcup-rest"
+
 echo "== netcup legacy fallback"
 mock_reset legacy; new_case netcup
 run

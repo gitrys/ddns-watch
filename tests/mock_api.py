@@ -22,6 +22,7 @@ from urllib.parse import urlparse, parse_qs
 STRATO_USER, STRATO_PASS = "example.com", 'p"a\\ss'
 LEGACY = ("12345", "LEGKEY", "LEG'PASS")
 TOKEN = "RESTTOKEN"
+TOKEN_SPECIAL = 'R"E\\S T$&!%'   # a key with quote, backslash, space and shell characters
 ZONE, DOMAIN_ID = "example.com", 4711
 S = {}
 
@@ -179,7 +180,7 @@ class H(BaseHTTPRequestHandler):
 
     # ---- netcup REST
     def rest(self, method, u, body):
-        if self.headers.get("Authorization") != "Bearer " + TOKEN:
+        if self.headers.get("Authorization") not in ("Bearer " + TOKEN, "Bearer " + TOKEN_SPECIAL):
             return self.reply(400, err("authenticationError", "invalid api key"))
         p = u.path.rstrip("/").split("/")[2:]  # after /v1
         if method == "GET" and p == ["domain"]:
