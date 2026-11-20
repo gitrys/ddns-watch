@@ -1,5 +1,9 @@
 # ddns-watch
 
+[![CI](https://github.com/gitrys/ddns-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/gitrys/ddns-watch/actions/workflows/ci.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
+[![Built with AI assistance](https://img.shields.io/badge/built%20with-AI%20assistance-8A2BE2)](#about)
+
 Keeps the `A` and `AAAA` record of one hostname pointing at your Linux machine, made for home
 servers with their **own public IPv6** (e.g. behind a FRITZ!Box with a daily reconnect).
 
@@ -142,6 +146,12 @@ The tests run the real script against mock servers (netcup, Strato, router, rele
 and stubs for `systemd-creds`, `systemctl`, `dig` and `ip`. CI runs shellcheck, the tests, a
 check of the systemd units and a secret scan. Releases: tag `vX.Y.Z` with a matching
 `CHANGELOG.md` section.
+
+## About
+
+ddns-watch was written with the help of an AI coding assistant (Claude Code) and reviewed by the
+maintainer. Every change has to pass the automated tests and CI described above. Please report
+anything that looks wrong in an issue.
 
 ## License
 
