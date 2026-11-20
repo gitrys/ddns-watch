@@ -3,7 +3,7 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] - unreleased
+## [1.0.0] - 2026-11-20
 
 First release of the new structure. Not compatible with the earlier single-folder version:
 install it fresh and remove the old units (the installer offers to do that).
@@ -13,7 +13,8 @@ install it fresh and remove the old units (the installer offers to do that).
   one-line installer that verifies the SHA256 checksum and, with the `gh` CLI, the GitHub build
   attestation. `ddns-watch update` installs new releases the same way.
 - Guided setup (`ddns-watch setup`): provider, hostname, login test, network detection,
-  notifications, summary before anything is changed.
+  notifications, summary before anything is changed. The interface list shows, per interface,
+  the IPv6 that would be published and recommends one.
 - Secrets encrypted with `systemd-creds` (TPM-bound where available): `set-secret`, `secrets`.
 - Hardened systemd units (dynamic user, read-only system, syscall filter;
   `systemd-analyze security`: 1.1 OK).
