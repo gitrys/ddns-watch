@@ -3,7 +3,7 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
-## [1.1.0] - unreleased
+## [1.1.0] - 2026-11-20
 
 ### Changed
 - `ddns-watch setup` redesigned: progress bar with the steps one below the other, colors (only on
