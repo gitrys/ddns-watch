@@ -3,6 +3,22 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - unreleased
+
+### Added
+- **Discord** and **Slack / Mattermost** notifications (`NOTIFY_TYPE=discord|slack`, detected
+  automatically from the webhook URL). Rejected updates are marked with ⚠️.
+- Notification and heartbeat URLs can be stored encrypted (`NOTIFY_URL=secret`,
+  `HEARTBEAT_URL=secret`, secrets `notify-url` / `heartbeat-url`); the setup always does that.
+  For Discord/Slack the webhook URL is the password, for ntfy the topic name works like one.
+- Guide: Discord and Slack sections in [docs/notifications.md](docs/notifications.md).
+- Issue templates (bug report, provider request, feature request) and `SECURITY.md` with private
+  vulnerability reporting.
+
+### Security
+- Notification and heartbeat URLs are passed to curl on stdin, no longer on the command line
+  (where other local users could see them in the process list).
+
 ## [1.2.0] - 2026-11-20
 
 ### Added

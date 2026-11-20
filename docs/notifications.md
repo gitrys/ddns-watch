@@ -7,13 +7,19 @@ ddns-watch runs quietly in the background. Two optional helpers tell you when so
 | What | ddns-watch **sends a message** when updates keep failing | ddns-watch **calls a URL** after every good run |
 | Tells you | "the DNS update is failing" (wrong key, provider down ...) | "this machine went quiet" (powered off, no network, service stopped) |
 | Why both | a dead machine cannot send a message | only the heartbeat notices that |
-| Services | ntfy, Gotify | Healthchecks.io, Uptime Kuma |
+| Services | ntfy, Gotify, Discord, Slack / Mattermost | Healthchecks.io, Uptime Kuma |
 
-Both are set in `sudo ddns-watch setup` (step 6), or in `/etc/ddns-watch/config`. Test them any time:
+Both are set in `sudo ddns-watch setup` (step 6). Test them any time:
 
 ```bash
 sudo ddns-watch test-notify
 ```
+
+**The URLs are stored encrypted**, like the API key. For Discord and Slack the webhook URL *is*
+the password (whoever has it can post to your channel); for ntfy the topic name works like one.
+The setup therefore stores them as the secrets `notify-url` / `heartbeat-url`, and the config only
+says `NOTIFY_URL=secret`. They are never shown in `status`, never logged and never passed on a
+command line.
 
 ## When you get a message
 
@@ -62,6 +68,32 @@ ddns-watch recognizes Gotify by the `/message` ending and sends JSON with title,
 priority (8 for "rejected", 5 otherwise). If your URL looks different, set `NOTIFY_TYPE=gotify`
 in `/etc/ddns-watch/config` (`ntfy` forces the other format).
 
+## Notification to Discord
+
+Messages appear in a Discord channel, from a bot named "ddns-watch". You need the
+*Manage Webhooks* permission on the channel (you have it on your own server).
+
+1. In Discord: right-click the channel (or the gear icon next to it) → **Edit Channel** →
+   **Integrations** → **Webhooks** → **New Webhook**.
+2. Optional: give it a name and avatar, e.g. "ddns-watch". Click **Copy Webhook URL**.
+   It looks like `https://discord.com/api/webhooks/123456.../AbCdEf...`.
+3. In `sudo ddns-watch setup`, step 6, paste it as notification URL. It is detected as
+   `discord` and stored encrypted. No access token needed.
+4. Answer **y** to "Send a test now?". "**ddns-watch test**" appears in the channel.
+
+Rejected updates start with ⚠️. To get a push on your phone, keep notifications for that channel
+on ("All messages") in the Discord app.
+
+## Notification to Slack (or Mattermost)
+
+1. Slack: create an app at <https://api.slack.com/apps> → **Incoming Webhooks** → activate →
+   **Add New Webhook to Workspace** → pick the channel → copy the URL
+   (`https://hooks.slack.com/services/T.../B.../...`).
+   Mattermost: **Integrations** → **Incoming Webhooks** → **Add** → copy the URL.
+2. Paste it in the setup, step 6. Slack URLs are detected automatically; for Mattermost set
+   `NOTIFY_TYPE=slack` in `/etc/ddns-watch/config` afterwards (same message format).
+3. Test with "Send a test now?" or `sudo ddns-watch test-notify`.
+
 ## Other webhooks
 
 With `NOTIFY_TYPE=ntfy` (the default for any other URL) ddns-watch sends a plain-text POST with the
@@ -95,13 +127,18 @@ If the pings stop for period + grace, you get an alarm, and a "back up" message 
 ## Settings in `/etc/ddns-watch/config`
 
 ```bash
-NOTIFY_URL=https://ntfy.sh/ddns-home-7f3k9q2xw4
-NOTIFY_TYPE=auto          # auto | ntfy | gotify
+NOTIFY_URL=secret         # the URL itself: sudo ddns-watch set-secret notify-url
+NOTIFY_TYPE=auto          # auto | ntfy | gotify | discord | slack
 NOTIFY_AFTER=15           # minutes of temporary errors before a message
-HEARTBEAT_URL=https://hc-ping.com/<uuid>
+HEARTBEAT_URL=secret      # the URL itself: sudo ddns-watch set-secret heartbeat-url
 ```
 
-Token (optional): `sudo ddns-watch set-secret notify-token`. Changes apply on the next run.
+A plain URL instead of `secret` also works (then it is readable in the config file).
+Token for ntfy / Gotify (optional): `sudo ddns-watch set-secret notify-token`.
+Changes apply on the next run.
+
+`auto` detects Discord (`discord.com/api/webhooks/`), Slack (`hooks.slack.com`) and Gotify (URL
+ending in `/message`); everything else is treated as ntfy.
 
 ## Troubleshooting
 
@@ -109,3 +146,5 @@ Token (optional): `sudo ddns-watch set-secret notify-token`. Changes apply on th
 - `journalctl -u ddns-watch -u ddns-watch-ipv4 | grep -i -e notif -e heartbeat` shows past attempts.
 - ntfy: wrong topic name in the app vs. the URL is the most common cause.
 - Gotify: the token must be an **application** token, not a client token.
+- Discord / Slack: a deleted or regenerated webhook gives "could not send"; paste the new URL in
+  `sudo ddns-watch setup` (step 6) or with `sudo ddns-watch set-secret notify-url`.

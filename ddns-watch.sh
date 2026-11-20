@@ -335,17 +335,18 @@ load_config() {
     fi
     NOTIFY_URL="${CFG[NOTIFY_URL]:-}"
     HEARTBEAT_URL="${CFG[HEARTBEAT_URL]:-}"
+    # "secret" = the URL is stored encrypted (secrets notify-url / heartbeat-url).
     for key in NOTIFY_URL HEARTBEAT_URL; do
-        if [[ -n "${!key}" && ! "${!key}" =~ ^https?://[A-Za-z0-9.:_/~%?=\&+-]+$ ]]; then
-            err "$key=${!key} in $CONFIG_FILE must be an http(s) URL"
+        if [[ -n "${!key}" && "${!key}" != secret && ! "${!key}" =~ ^https?://[A-Za-z0-9.:_/~%?=\&+-]+$ ]]; then
+            err "$key=${!key} in $CONFIG_FILE must be an http(s) URL or \"secret\""
             return 1
         fi
     done
     NOTIFY_TYPE="${CFG[NOTIFY_TYPE]:-auto}"
     NOTIFY_TYPE="${NOTIFY_TYPE,,}"
     case "$NOTIFY_TYPE" in
-        auto|ntfy|gotify) ;;
-        *) err "NOTIFY_TYPE=$NOTIFY_TYPE in $CONFIG_FILE must be auto, ntfy or gotify"; return 1 ;;
+        auto|ntfy|gotify|discord|slack) ;;
+        *) err "NOTIFY_TYPE=$NOTIFY_TYPE in $CONFIG_FILE must be auto, ntfy, gotify, discord or slack"; return 1 ;;
     esac
     NOTIFY_AFTER="${CFG[NOTIFY_AFTER]:-15}"
     if [[ ! "$NOTIFY_AFTER" =~ ^[0-9]{1,5}$ ]]; then
@@ -599,10 +600,18 @@ expand_ipv6() {
 # LoadCredentialEncrypted=, so the service only ever sees them decrypted in $CREDENTIALS_DIRECTORY.
 # On other hardware (or after Secure Boot changes) they cannot be decrypted: enter them again.
 
+# Core secrets the current config uses (for listings).
+core_secrets_in_use() {
+    [[ -n "${NOTIFY_URL:-}" ]] && echo notify-token
+    [[ "${NOTIFY_URL:-}" == secret ]] && echo notify-url
+    [[ "${HEARTBEAT_URL:-}" == secret ]] && echo heartbeat-url
+    return 0
+}
+
 # all_secret_names -> "secret provider" per line, for every installed plugin.
 all_secret_names() {
     local n s
-    printf '%s %s\n' notify-token core
+    printf '%s core\n' notify-token notify-url heartbeat-url
     while IFS= read -r n; do
         (
             load_provider "$n" >/dev/null 2>&1 || exit 0
@@ -653,7 +662,11 @@ set_secret() {
     fi
     check_systemd_version
     if [[ "$provider" == core ]]; then
-        help="Optional access token for NOTIFY_URL, sent as \"Authorization: Bearer ...\" (e.g. an ntfy access token)."
+        case "$name" in
+            notify-token) help="Optional access token for the notification service (ntfy access token, Gotify app token)." ;;
+            notify-url) help="The notification URL, kept secret (Discord/Slack webhook, ntfy topic). Set NOTIFY_URL=secret in the config." ;;
+            heartbeat-url) help="The heartbeat URL, kept secret. Set HEARTBEAT_URL=secret in the config." ;;
+        esac
     else
         help=$(load_provider "$provider" >/dev/null 2>&1 && printf '%s' "${PROVIDER_HELP[$name]:-}")
     fi
@@ -702,7 +715,7 @@ show_secrets() {
     is_root || die "secrets must run as root: sudo ddns-watch secrets"
     load_config || exit 1
     say "Provider $PROVIDER uses: ${PROVIDER_SECRETS:-no secrets}   (store: $CRED_STORE)"
-    for s in $PROVIDER_SECRETS ${NOTIFY_URL:+notify-token}; do
+    for s in $PROVIDER_SECRETS $(core_secrets_in_use); do
         if [[ ! -f "$CRED_STORE/$s" ]]; then
             state="not stored"
         elif systemd-creds decrypt --name="$s" "$CRED_STORE/$s" - >/dev/null 2>&1; then
@@ -911,11 +924,28 @@ clear_failure() {
 }
 
 # notify_type -> ntfy | gotify. NOTIFY_TYPE=auto (default) detects Gotify by its /message endpoint.
+URL_RE='^https?://[A-Za-z0-9.:_/~%?=&+-]+$'
+
+# effective_url KEY SECRET: the URL from the config, or - when the config says "secret" - from the
+# encrypted secret (for webhook URLs that work like a password: Discord, Slack, ntfy topics,
+# Healthchecks UUIDs). Prints nothing if unset or invalid.
+effective_url() {
+    local v="${!1:-}"
+    [[ "$v" == secret ]] && v=$(read_secret "$2")
+    [[ "$v" =~ $URL_RE ]] && printf '%s' "$v"
+}
+
+# notify_type -> ntfy | gotify | discord | slack. NOTIFY_TYPE=auto (default) detects it by the URL.
 notify_type() {
     case "${NOTIFY_TYPE:-auto}" in
-        ntfy|gotify) printf '%s\n' "$NOTIFY_TYPE" ;;
-        *) if [[ "$NOTIFY_URL" =~ /message(\?|$) ]]; then echo gotify; else echo ntfy; fi ;;
+        ntfy|gotify|discord|slack) printf '%s\n' "$NOTIFY_TYPE"; return ;;
     esac
+    local u
+    u=$(effective_url NOTIFY_URL notify-url)
+    if [[ "$u" =~ ://([a-z]+\.)?discord(app)?\.com/api/webhooks/ ]]; then echo discord
+    elif [[ "$u" =~ ://hooks\.slack\.com/ ]]; then echo slack
+    elif [[ "$u" =~ /message(\?|$) ]]; then echo gotify
+    else echo ntfy; fi
 }
 
 json_escape() {
@@ -929,40 +959,58 @@ json_escape() {
 # notify TITLE PRIORITY(default|high) TAGS MESSAGE: sends the message to NOTIFY_URL.
 #   ntfy (and any webhook that takes a text body): text POST, ntfy headers Title/Priority/Tags,
 #        optional secret notify-token as "Authorization: Bearer".
-#   gotify: JSON {title, message, priority} to .../message, token as "X-Gotify-Key" (secret
-#        notify-token) or as ?token=... in the URL.
-# The token goes to curl on stdin, never on the command line.
+#   gotify:  JSON {title, message, priority} to .../message, secret notify-token as X-Gotify-Key.
+#   discord: JSON {username, content} to a Discord webhook URL.
+#   slack:   JSON {text} to a Slack (or Mattermost) incoming webhook URL.
+# URL and token go to curl on stdin (curl config), never on the command line.
 notify() {
     [[ -n "$NOTIFY_URL" ]] || return 1
-    local token auth="" ok=1
+    local url token type cfg body ctype prefix="" ok=1
+    url=$(effective_url NOTIFY_URL notify-url)
+    if [[ -z "$url" ]]; then
+        warn "NOTIFY_URL is not a valid URL$([[ "$NOTIFY_URL" == secret ]] && printf ' (secret notify-url missing or invalid)')"
+        return 1
+    fi
+    type=$(notify_type)
     token=$(read_secret notify-token)
-    case "$(notify_type)" in
+    [[ "$2" == high ]] && prefix=":warning: "
+    cfg="url = \"$(curl_cfg_escape "$url")\""
+    ctype="application/json"
+    case "$type" in
         gotify)
-            [[ -n "$token" ]] && auth=$(printf 'header = "X-Gotify-Key: %s"' "$(curl_cfg_escape "$token")")
-            local prio=5
-            [[ "$2" == high ]] && prio=8
-            printf '%s\n' "$auth" | curl --silent --show-error --fail --max-time 15 -K - \
-                -H 'Content-Type: application/json' \
-                --data-binary "{\"title\":\"$(json_escape "$1")\",\"message\":\"$(json_escape "$4")\",\"priority\":$prio}" \
-                "$NOTIFY_URL" >/dev/null 2>&1 && ok=0
+            [[ -n "$token" ]] && cfg+=$'\n'"header = \"X-Gotify-Key: $(curl_cfg_escape "$token")\""
+            body="{\"title\":\"$(json_escape "$1")\",\"message\":\"$(json_escape "$4")\",\"priority\":$([[ "$2" == high ]] && echo 8 || echo 5)}"
+            ;;
+        discord)
+            body="{\"username\":\"ddns-watch\",\"content\":\"$(json_escape "$prefix**$1**"$'\n'"$4")\"}"
+            ;;
+        slack)
+            body="{\"text\":\"$(json_escape "$prefix*$1*"$'\n'"$4")\"}"
             ;;
         *)
-            [[ -n "$token" ]] && auth=$(printf 'header = "Authorization: Bearer %s"' "$(curl_cfg_escape "$token")")
-            printf '%s\n' "$auth" | curl --silent --show-error --fail --max-time 15 -K - \
-                -H "Title: $1" -H "Priority: $2" -H "Tags: $3" -H 'Content-Type: text/plain; charset=utf-8' \
-                --data-binary "$4" "$NOTIFY_URL" >/dev/null 2>&1 && ok=0
+            [[ -n "$token" ]] && cfg+=$'\n'"header = \"Authorization: Bearer $(curl_cfg_escape "$token")\""
+            cfg+=$'\n'"header = \"Title: $(curl_cfg_escape "$1")\""$'\n'"header = \"Priority: $2\""$'\n'"header = \"Tags: $3\""
+            body="$4"
+            ctype="text/plain; charset=utf-8"
             ;;
     esac
+    if printf '%s\n' "$cfg" | curl --silent --show-error --fail --max-time 15 -K - \
+        -H "Content-Type: $ctype" --data-binary "$body" >/dev/null 2>&1; then
+        ok=0
+    fi
     if [[ "$ok" -eq 0 ]]; then
-        say "notification sent ($(notify_type)): $1"
+        say "notification sent ($type): $1"
         return 0
     fi
-    warn "could not send the notification to NOTIFY_URL ($(notify_type))"
+    warn "could not send the notification ($type)"
     return 1
 }
 
 heartbeat_ping() {
-    curl --silent --fail --max-time 10 -o /dev/null "$HEARTBEAT_URL" 2>/dev/null
+    local url
+    url=$(effective_url HEARTBEAT_URL heartbeat-url)
+    [[ -n "$url" ]] || return 1
+    printf 'url = "%s"\n' "$(curl_cfg_escape "$url")" | curl --silent --fail --max-time 10 -K - -o /dev/null 2>/dev/null
 }
 
 # Pings HEARTBEAT_URL after a good run (at most once a minute). If the pings stop, the external
@@ -1182,6 +1230,27 @@ show_iface_table() {
         s_warn "No interface has a stable public IPv6, so only the A record (IPv4) can be kept"
         s_warn "up to date, unless one appears later."
     fi
+}
+
+# setup_url_secret KEY SECRET PROMPT: asks for a URL and stores it encrypted (config: KEY=secret).
+# Enter keeps a stored one, "none" removes it. Sets KEY to "secret" or "".
+setup_url_secret() {
+    local key="$1" secret="$2" prompt="$3" old="${OLD[$1]:-}" def="none"
+    [[ "$old" == secret ]] && def="keep stored"
+    [[ -n "$old" && "$old" != secret ]] && def="$old"
+    while true; do
+        ask "$prompt" "$def"
+        case "$REPLY_VALUE" in
+            none|"") printf -v "$key" '%s' ""; set_new "$key" ""; return ;;
+            "keep stored") printf -v "$key" '%s' secret; set_new "$key" secret; return ;;
+        esac
+        [[ "$REPLY_VALUE" =~ $URL_RE ]] && break
+        s_info "That is not an http(s) URL. Enter = $def"
+    done
+    store_secret "$secret" "$REPLY_VALUE" || die "systemd-creds encrypt failed"
+    REPLY_VALUE=""
+    printf -v "$key" '%s' secret
+    set_new "$key" secret
 }
 
 # Writes the config atomically. Keys not asked in this run but present before are kept.
@@ -1455,35 +1524,34 @@ setup() {
     s_info "Two optional helpers; Enter skips them. Step-by-step guide: $NOTIFY_GUIDE"
     echo
     printf '  %sMessage when updates keep failing%s\n' "$S_B" "$S_R"
-    s_info "ntfy: https://ntfy.sh/<long-secret-topic> (phone app \"ntfy\") or your own ntfy server."
-    s_info "Gotify: https://gotify.example.com/message (token below)."
-    ask "Notification URL" "${OLD[NOTIFY_URL]:-none}"
-    [[ "$REPLY_VALUE" == none ]] && REPLY_VALUE=""
-    NOTIFY_URL="$REPLY_VALUE" NOTIFY_TYPE="${OLD[NOTIFY_TYPE]:-auto}"
+    s_info "ntfy: https://ntfy.sh/<long-secret-topic>  |  Gotify: https://gotify.example.com/message"
+    s_info "Discord: channel webhook URL  |  Slack / Mattermost: incoming webhook URL"
+    s_info "The URL is stored encrypted, like a password (for Discord/Slack it IS one)."
+    NOTIFY_TYPE="${OLD[NOTIFY_TYPE]:-auto}"
+    setup_url_secret NOTIFY_URL notify-url "Notification URL"
     if [[ -n "$NOTIFY_URL" ]]; then
-        set_new NOTIFY_URL "$NOTIFY_URL"
         s_ok "$(notify_type)"
-        ask_secret "Access token (ntfy: protected topic, Gotify: app token), hidden ${S_D}[Enter = none / keep]${S_R}"
-        [[ -n "$REPLY_VALUE" ]] && { store_secret notify-token "$REPLY_VALUE" || die "systemd-creds encrypt failed"; }
-        REPLY_VALUE=""
+        case "$(notify_type)" in
+            ntfy|gotify)
+                ask_secret "Access token (ntfy: protected topic, Gotify: app token), hidden ${S_D}[Enter = none / keep]${S_R}"
+                [[ -n "$REPLY_VALUE" ]] && { store_secret notify-token "$REPLY_VALUE" || die "systemd-creds encrypt failed"; }
+                REPLY_VALUE=""
+                ;;
+        esac
     else
-        set_new NOTIFY_URL ""
         s_info "  skipped"
     fi
     echo
     printf '  %sHeartbeat: alarm when this machine goes quiet%s\n' "$S_B" "$S_R"
     s_info "A URL called after every good run. If the calls stop, that service warns you, e.g. a"
     s_info "Healthchecks.io check (period 5 min) or an Uptime Kuma push monitor."
-    ask "Heartbeat URL" "${OLD[HEARTBEAT_URL]:-none}"
-    [[ "$REPLY_VALUE" == none ]] && REPLY_VALUE=""
-    HEARTBEAT_URL="$REPLY_VALUE"
-    set_new HEARTBEAT_URL "$HEARTBEAT_URL"
+    setup_url_secret HEARTBEAT_URL heartbeat-url "Heartbeat URL"
     [[ -z "$HEARTBEAT_URL" ]] && s_info "  skipped"
     if [[ -n "$NOTIFY_URL$HEARTBEAT_URL" ]] && ask_yes "Send a test now?" y; then
         if [[ -n "$NOTIFY_URL" ]]; then
             if notify "ddns-watch test" default "white_check_mark" \
                 "Test message from the ddns-watch setup on $(hostname). Notifications work." >/dev/null 2>&1; then
-                s_ok "Test notification sent  ${S_D}(check your phone / Gotify)${S_R}"
+                s_ok "Test notification sent  ${S_D}(check your phone / channel)${S_R}"
             else
                 s_bad "Test notification failed: check the URL and the token (sudo ddns-watch test-notify later)"
             fi
@@ -1507,8 +1575,8 @@ setup() {
         "$(printf '%-12s %s' Records "$rec_txt")" \
         "$(printf '%-12s %s' Interface "$IFACE${v6:+ -> $v6}")" \
         "$(printf '%-12s %s' IPv4 "$v4_txt")" \
-        "$(printf '%-12s %s' Notify "${NEW[NOTIFY_URL]:-none}")" \
-        "$(printf '%-12s %s' Heartbeat "${NEW[HEARTBEAT_URL]:-none}")" \
+        "$(printf '%-12s %s' Notify "$([[ -n "$NOTIFY_URL" ]] && echo "$(notify_type), URL encrypted" || echo none)")" \
+        "$(printf '%-12s %s' Heartbeat "$([[ -n "$HEARTBEAT_URL" ]] && echo "URL encrypted" || echo none)")" \
         "$(printf '%-12s %s' Secrets "encrypted ($keyinfo)")"
     echo
     ask_yes "Apply and start ddns-watch?" y || { echo; s_info "Cancelled. The config was not changed."; return 0; }
@@ -1632,12 +1700,12 @@ show_status() {
             say "           next retry after $(date -d "@$FAIL_NEXT" "+%T")"
         fi
     fi
-    [[ -n "$NOTIFY_URL" ]] && say "Notify:    $NOTIFY_URL (after $NOTIFY_AFTER min of errors)"
-    [[ -n "$HEARTBEAT_URL" ]] && say "Heartbeat: $HEARTBEAT_URL"
+    [[ -n "$NOTIFY_URL" ]] && say "Notify:    $([[ "$NOTIFY_URL" == secret ]] && echo "URL stored encrypted" || echo "$NOTIFY_URL") (type ${NOTIFY_TYPE}, after $NOTIFY_AFTER min of errors)"
+    [[ -n "$HEARTBEAT_URL" ]] && say "Heartbeat: $([[ "$HEARTBEAT_URL" == secret ]] && echo "URL stored encrypted" || echo "$HEARTBEAT_URL")"
 
     if is_root; then
         say "Secrets:"
-        for s in $PROVIDER_SECRETS ${NOTIFY_URL:+notify-token}; do
+        for s in $PROVIDER_SECRETS $(core_secrets_in_use); do
             if [[ ! -f "$CRED_STORE/$s" ]]; then
                 state="not stored"
             elif systemd-creds decrypt --name="$s" "$CRED_STORE/$s" - >/dev/null 2>&1; then

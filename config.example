@@ -19,11 +19,12 @@ HOSTNAME=home.example.com       # the name whose A/AAAA records follow this mach
 #IPV4_INTERVAL=300              # seconds between IPv4 checks (setup writes the timer for it)
 
 # --- notifications (optional)
-#NOTIFY_URL=https://ntfy.sh/<long-secret-topic>   # message when updates keep failing (docs/notifications.md)
-#NOTIFY_TYPE=auto              # auto | ntfy | gotify (auto: URL ending in /message = Gotify)
+#NOTIFY_URL=secret             # message when updates keep failing; URL: sudo ddns-watch set-secret notify-url
+                                # (or a plain URL here; see docs/notifications.md)
+#NOTIFY_TYPE=auto              # auto | ntfy | gotify | discord | slack
 #NOTIFY_AFTER=15                # minutes of temporary errors before notifying
                                 # optional token: sudo ddns-watch set-secret notify-token
-#HEARTBEAT_URL=https://hc.example.com/ping/<uuid>   # called after every good run
+#HEARTBEAT_URL=secret          # called after every good run; URL: sudo ddns-watch set-secret heartbeat-url
 
 # --- provider settings (only those of the active PROVIDER are used)
 # netcup  (secret: netcup-api-key; legacy API: netcup-legacy-key + netcup-legacy-password)

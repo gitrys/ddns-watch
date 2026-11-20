@@ -389,9 +389,39 @@ printf '%s' 'GOTKEY' > "$D/creds/notify-token"
 printf 'wrong' > "$D/creds/strato-password"
 run
 expect "permanent error via Gotify -> priority 8" [ "$(mock_state '[.gotify[] | select(.title=="DNS update rejected" and .priority==8)] | length')" = 1 ]
-new_case netcup; echo 'NOTIFY_TYPE=slack' >> "$D/etc/config"
+new_case netcup; echo 'NOTIFY_TYPE=teams' >> "$D/etc/config"
 run
-expect "unknown NOTIFY_TYPE rejected" has "must be auto, ntfy or gotify"
+expect "unknown NOTIFY_TYPE rejected" has "must be auto, ntfy, gotify, discord or slack"
+
+echo "== Discord, Slack, URLs as secrets"
+detect() { ( source "$ROOT/ddns-watch.sh"; NOTIFY_TYPE=auto NOTIFY_URL="$1"; notify_type ); }
+expect "type detection: Discord webhook" [ "$(detect https://discord.com/api/webhooks/1/abc)" = discord ]
+expect "type detection: Slack webhook" [ "$(detect https://hooks.slack.com/services/T0/B0/x)" = slack ]
+expect "type detection: Gotify /message" [ "$(detect https://gotify.example.com/message)" = gotify ]
+expect "type detection: anything else = ntfy" [ "$(detect https://ntfy.sh/topic)" = ntfy ]
+mock_reset; new_case netcup
+printf 'NOTIFY_URL=secret\nNOTIFY_TYPE=discord\nHEARTBEAT_URL=secret\n' >> "$D/etc/config"
+run_store set-secret notify-url <<< "$MOCK/discord/api/webhooks/123/SECRETHOOK"
+run_store set-secret heartbeat-url <<< "$MOCK/heartbeat"
+run_store test-notify
+expect "Discord (URL from secret): JSON content with bold title" [ "$(mock_state '[.discord[] | select(.username=="ddns-watch" and (.content | startswith("**ddns-watch test**")))] | length')" = 1 ]
+expect "  ... heartbeat URL from secret" eval '[[ "$OUT" == *"heartbeat ping: OK"* ]] && [ "$(mock_state .heartbeat)" = 1 ]'
+expect "  ... secret URLs listed by 'secrets'" eval 'run_store secrets; [[ "$OUT" == *notify-url*"ok (encrypted)"* && "$OUT" == *heartbeat-url* ]]'
+run_store status
+expect "  ... status does not show the secret URL" eval '[[ "$OUT" == *"URL stored encrypted"* && "$OUT" != *SECRETHOOK* ]]'
+mock_reset; new_case strato
+printf 'NOTIFY_URL=%s/discord/api/webhooks/123/SECRETHOOK\nNOTIFY_TYPE=discord\n' "$MOCK" >> "$D/etc/config"
+printf 'wrong' > "$D/creds/strato-password"
+run
+expect "Discord: rejected update gets a :warning:" [ "$(mock_state '[.discord[] | select(.content | startswith(":warning: **DNS update rejected**"))] | length')" = 1 ]
+mock_reset; new_case netcup
+printf 'NOTIFY_URL=secret\nNOTIFY_TYPE=slack\n' >> "$D/etc/config"
+run_store set-secret notify-url <<< "$MOCK/slack/services/T0/B0/SECRETHOOK"
+run_store test-notify
+expect "Slack: JSON text with bold title" [ "$(mock_state '[.slack[] | select(.text | startswith("*ddns-watch test*"))] | length')" = 1 ]
+new_case netcup; printf 'NOTIFY_URL=secret\n' >> "$D/etc/config"
+run_store test-notify
+expect "NOTIFY_URL=secret without the secret -> clear message" has "secret notify-url missing"
 
 echo "== IPv6 selection and watcher filter"
 run_v6() {
@@ -453,7 +483,7 @@ expect "  ... first check ok -> 'ddns-watch is running.'" has "ddns-watch is run
 expect "  ... notification type detected, test sent" eval '[[ "$OUT" == *"Test notification sent"* ]] && [ "$(mock_state "[.notify[] | select(.title==\"ddns-watch test\")] | length")" = 1 ]'
 expect "  ... config written" eval 'conf_has PROVIDER=netcup && conf_has HOSTNAME=example.com && conf_has IFACE=lo'
 expect "  ... IPv4 source suggested: dns (no router answer)" eval 'conf_has IPV4_SOURCE=dns && conf_has IPV4_INTERVAL=300'
-expect "  ... notifications" conf_has "NOTIFY_URL=$MOCK/notify"
+expect "  ... notification URL stored encrypted, config says secret" eval 'conf_has NOTIFY_URL=secret && [ -f "$D/store/notify-url" ] && ! grep -q "127.0.0.1" "$D/store/notify-url"'
 expect "  ... key stored encrypted" [ -f "$D/store/netcup-api-key" ]
 expect "  ... timer interval drop-in" grep -q "OnUnitActiveSec=300s" "$D/units/ddns-watch-ipv4.timer.d/interval.conf"
 expect "  ... services enabled" grep -q "enable --now ddns-watch.service ddns-watch-ipv4.timer" "$D/systemctl.log"
@@ -609,7 +639,7 @@ for f in "$ROOT"/providers/[a-z0-9]*.sh; do
 done
 
 echo "== secrets"
-LEAK=$(grep -nE "RESTTOKEN|LEG'PASS|LEGKEY|p\"a|NTFYTOKEN|GOTKEY" "$TMP/all-output.log" || true)
+LEAK=$(grep -nE "RESTTOKEN|LEG'PASS|LEGKEY|p\"a|NTFYTOKEN|GOTKEY|SECRETHOOK" "$TMP/all-output.log" || true)
 expect "no secret in any output" [ -z "$LEAK" ]
 
 echo

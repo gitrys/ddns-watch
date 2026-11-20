@@ -1,0 +1,27 @@
+name: Feature request
+description: An idea to make ddns-watch better.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please have a look at the [ROADMAP](https://github.com/gitrys/ddns-watch/blob/main/ROADMAP.md)
+        first, maybe it is already planned (e.g. several hostnames). ddns-watch stays small and
+        focused on home servers with their own IPv6.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would it solve?
+      placeholder: "When my router reconnects, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your idea
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / workarounds you tried

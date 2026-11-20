@@ -9,6 +9,8 @@
                                         upnp-cgnat, upnp-down, down (all provider APIs answer 503)
   POST /notify                          records notifications (title, priority, auth, text)
   POST /gotify/message                  Gotify API (X-Gotify-Key GOTKEY, JSON), records messages
+  POST /discord/api/webhooks/123/SECRETHOOK   Discord webhook (JSON content), records messages
+  POST /slack/services/T0/B0/SECRETHOOK       Slack incoming webhook (JSON text), records messages
   GET  /heartbeat                       counts heartbeat pings
   GET  /release/latest                  {"tag_name": "v<release>"} (release set via /_reset)
   GET  /release/<path>                  file from $MOCK_RELEASE_DIR
@@ -30,7 +32,7 @@ S = {}
 
 def reset(mode="normal", release="9.9.9"):
     S.clear()
-    S.update(mode=mode, log=[], strato=None, revs={"rev-active": "active"}, notify=[], gotify=[], heartbeat=0, release=release)
+    S.update(mode=mode, log=[], strato=None, revs={"rev-active": "active"}, notify=[], gotify=[], discord=[], slack=[], heartbeat=0, release=release)
     S["rest"] = [
         {"identifier": "r1", "name": "@", "type": "NS", "rdata": "ns1.example.net.", "ttl": 86400, "immutable": True},
         {"identifier": "r2", "name": "@", "type": "A", "rdata": "192.0.2.1", "ttl": 300, "immutable": False},
@@ -100,6 +102,14 @@ class H(BaseHTTPRequestHandler):
             return self.upnp()
         if u.path == "/notify":
             return self.notify()
+        if u.path in ("/discord/api/webhooks/123/SECRETHOOK", "/slack/services/T0/B0/SECRETHOOK"):
+            n = int(self.headers.get("Content-Length") or 0)
+            msg = json.loads(self.rfile.read(n) or b"{}")
+            field = "content" if u.path.startswith("/discord") else "text"
+            if self.headers.get("Content-Type") != "application/json" or not msg.get(field):
+                return self.reply(400, {"message": "Cannot send an empty message"})
+            S["discord" if field == "content" else "slack"].append(msg)
+            return self.reply(204 if field == "content" else 200, None if field == "content" else "ok", "text/plain")
         if u.path == "/gotify/message":
             n = int(self.headers.get("Content-Length") or 0)
             msg = json.loads(self.rfile.read(n) or b"{}")

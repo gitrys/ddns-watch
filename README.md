@@ -15,7 +15,7 @@ servers with their **own public IPv6** (e.g. behind a FRITZ!Box with a daily rec
 - **Secrets encrypted** with `systemd-creds` (bound to the machine's TPM where available).
 - **Hardened service:** own throw-away user, read-only system, syscall filter.
 - **Plugins** for DNS providers: netcup, Strato and any dyndns2 service (deSEC, Dynu, No-IP ...).
-- Retries, daily verification, optional notifications (ntfy, Gotify) and heartbeat
+- Retries, daily verification, optional notifications (ntfy, Gotify, Discord, Slack) and heartbeat
   ([guide](docs/notifications.md)).
 
 ## Install
@@ -110,13 +110,13 @@ is shared and not reachable from outside (setup detects this).
   minutes; notification after `NOTIFY_AFTER` minutes (default 15), and again when it works.
 - Once a day the current addresses are sent even without a change (fixes records changed by hand).
 - **Notification** (`NOTIFY_URL`, optional): a message to your phone when updates keep failing,
-  via **ntfy** (no account needed) or **Gotify**.
+  via **ntfy** (no account needed), **Gotify**, **Discord** or **Slack** / Mattermost.
 - **Heartbeat** (`HEARTBEAT_URL`, optional): a URL called after every good run, e.g. a
   Healthchecks.io check or an Uptime Kuma push monitor. When the calls stop, that service tells
   you the machine or the service is down.
 - Test both: `sudo ddns-watch test-notify`.
 
-**Step-by-step guide: [docs/notifications.md](docs/notifications.md)** (ntfy, Gotify,
+**Step-by-step guide: [docs/notifications.md](docs/notifications.md)** (ntfy, Gotify, Discord, Slack,
 Healthchecks.io, Uptime Kuma).
 
 ## Moving to new hardware

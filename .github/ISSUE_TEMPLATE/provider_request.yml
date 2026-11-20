@@ -1,0 +1,48 @@
+name: New DNS provider
+description: Ask for (or offer) a plugin for another DNS provider.
+labels: [provider]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **First try `PROVIDER=dyndns2`:** many providers (deSEC, Dynu, No-IP and many registrars)
+        speak the dyndns2 protocol and already work with `DYNDNS2_URL` set to their update URL.
+
+        A plugin is one file in `providers/`. If you can write a little shell, see
+        [CONTRIBUTING.md](https://github.com/gitrys/ddns-watch/blob/main/CONTRIBUTING.md):
+        pull requests with a mock test are very welcome.
+  - type: input
+    id: name
+    attributes:
+      label: Provider
+      placeholder: Hetzner DNS
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: Link to the provider's DNS API documentation
+      placeholder: https://dns.hetzner.com/api-docs
+    validations:
+      required: true
+  - type: dropdown
+    id: dyndns2
+    attributes:
+      label: Does the provider offer a dyndns2 update URL?
+      options: ["no", "yes (then PROVIDER=dyndns2 may already work)", "don't know"]
+    validations:
+      required: true
+  - type: dropdown
+    id: help
+    attributes:
+      label: Can you help?
+      options:
+        - I would write the plugin myself (pull request)
+        - I can test it against a real account
+        - I can only ask for it
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else (authentication, rate limits, ...)
