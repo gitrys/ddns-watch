@@ -1,0 +1,49 @@
+# ddns-watch: one update run, started by ddns-watch-ipv4.timer. Catches IPv4-only changes,
+# which the IPv6 watcher cannot see. Secrets: drop-in ddns-watch-ipv4.service.d/credentials.conf.
+# Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
+
+[Unit]
+Description=ddns-watch DynDNS updater (periodic IPv4 check)
+Documentation=https://github.com/gitrys/ddns-watch
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ddns-watch run
+
+ConfigurationDirectory=ddns-watch
+StateDirectory=ddns-watch
+StateDirectoryMode=0700
+
+DynamicUser=yes
+User=ddns-watch
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+DevicePolicy=closed

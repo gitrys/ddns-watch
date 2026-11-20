@@ -1,0 +1,14 @@
+# ddns-watch: periodic IPv4 check (the interval becomes configurable with the IPv4 sources).
+# Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
+
+[Unit]
+Description=ddns-watch periodic IPv4 check
+Documentation=https://github.com/gitrys/ddns-watch
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,64 @@
+# ddns-watch: keeps the A/AAAA record of one hostname pointing at this machine.
+# Installed by install.sh to /etc/systemd/system/. Secrets come from the drop-in
+# ddns-watch.service.d/credentials.conf written by "ddns-watch set-secret".
+# Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
+
+[Unit]
+Description=ddns-watch DynDNS updater (reacts to IPv6 address changes)
+Documentation=https://github.com/gitrys/ddns-watch
+Wants=network-online.target
+After=network-online.target
+# Never give up: a missing/undecryptable secret or no network is retried every 30 s, not every 5 s.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ddns-watch watch
+Restart=on-failure
+RestartSec=30
+
+# Directories: config stays root-owned and read-only; state and runtime belong to the service.
+ConfigurationDirectory=ddns-watch
+StateDirectory=ddns-watch
+StateDirectoryMode=0700
+RuntimeDirectory=ddns-watch
+RuntimeDirectoryMode=0700
+
+# Own throw-away user. The IPv4 timer service uses the same name, so both share the UID
+# (and the state directory with its update lock) while they run.
+DynamicUser=yes
+User=ddns-watch
+UMask=0077
+
+# Hardening: no privileges, read-only system, only the network families it needs
+# (AF_NETLINK for "ip -6 monitor").
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+DevicePolicy=closed
+
+[Install]
+WantedBy=multi-user.target

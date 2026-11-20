@@ -1,0 +1,37 @@
+# ddns-watch configuration: /etc/ddns-watch/config
+# "sudo ddns-watch setup" writes this file for you. KEY=value per line, '#' starts a comment.
+# The file is read, never executed. Changes apply on the next run; after changing IFACE run
+# "sudo systemctl restart ddns-watch". Secrets (API keys, passwords) do NOT go here: store them
+# encrypted with "sudo ddns-watch set-secret NAME".
+
+# --- required
+PROVIDER=netcup                 # see: ddns-watch providers   (netcup, strato, dyndns2, ...)
+HOSTNAME=home.example.com       # the name whose A/AAAA records follow this machine
+
+# --- network (optional)
+#IFACE=eth0                     # default: interface of the default route
+#RECORDS=A+AAAA                 # A+AAAA | AAAA (IPv6 only, e.g. DS-Lite) | A (IPv4 only)
+#IPV6_SUFFIX=::67c:16ff:fedf:a200   # pick this interface ID if the machine has several IPv6
+#IPV4_SOURCE=dns                # interface | upnp | dns | command
+#IPV4_FALLBACK=none             # none | dns   (if the source above gives nothing)
+#UPNP_URL=http://192.168.178.1:49000/igdupnp/control/WANIPConn1   # default: FRITZ!Box path on the gateway
+#IPV4_COMMAND=/usr/local/bin/my-public-ip   # for IPV4_SOURCE=command: prints one IPv4
+#IPV4_INTERVAL=300              # seconds between IPv4 checks (setup writes the timer for it)
+
+# --- notifications (optional)
+#NOTIFY_URL=https://ntfy.example.com/ddns   # text POST when updates keep failing (ntfy-compatible)
+#NOTIFY_AFTER=15                # minutes of temporary errors before notifying
+                                # optional token: sudo ddns-watch set-secret notify-token
+#HEARTBEAT_URL=https://hc.example.com/ping/<uuid>   # called after every good run
+
+# --- provider settings (only those of the active PROVIDER are used)
+# netcup  (secret: netcup-api-key; legacy API: netcup-legacy-key + netcup-legacy-password)
+#NETCUP_API=auto                # auto | rest | legacy
+#NETCUP_ZONE=example.co.uk      # only for multi-part TLDs
+#NETCUP_CUSTOMER=12345          # legacy API only
+#NETCUP_TTL=300
+# strato  (secret: strato-password)
+#STRATO_USER=home.example.com   # default: HOSTNAME
+# dyndns2 (secret: dyndns2-password)
+#DYNDNS2_URL=https://update.dedyn.io/nic/update
+#DYNDNS2_USER=home.example.com  # default: HOSTNAME

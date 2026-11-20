@@ -1,0 +1,18 @@
+# Secrets and runtime state never live in the repo (installed: /etc/ddns-watch, /var/lib/ddns-watch).
+# These guard against copies made while testing in a checkout.
+/config
+/credentials
+/credentials.*
+/last
+*.swp
+
+# Backups and personal notes
+*.bak
+*.bak-*
+umzug-strato-netcup.md
+docs/plan-hardening.md
+
+# Build and test artifacts
+/dist/
+tests/tmp/
+__pycache__/

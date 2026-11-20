@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck jq
+
+      - name: shellcheck
+        run: shellcheck -S warning -x ddns-watch.sh install.sh tests/run.sh tools/build-release.sh providers/*.sh
+
+      - name: Tests (mock APIs)
+        run: tests/run.sh
+
+      - name: systemd units (syntax + hardening score must stay below 2.0)
+        run: |
+          sudo install -m 755 ddns-watch.sh /usr/local/bin/ddns-watch
+          systemd-analyze verify --man=no systemd/ddns-watch.service systemd/ddns-watch-ipv4.service systemd/ddns-watch-ipv4.timer
+          for u in systemd/ddns-watch.service systemd/ddns-watch-ipv4.service; do
+            systemd-analyze security --offline=true --threshold=20 --no-pager "$u" | tail -n 1
+          done
+
+      - name: Release build works
+        run: tools/build-release.sh 0.0.0 /tmp/dist && tar -tzf /tmp/dist/ddns-watch-0.0.0.tar.gz | head -n 20
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
