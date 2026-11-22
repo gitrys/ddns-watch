@@ -65,7 +65,14 @@ USER_FORCE=0
 # Under systemd a "<N>" prefix sets the journal priority (3 = error, 4 = warning, 5 = notice,
 # 6 = info, 7 = debug). ddns-watch-ipv4.service keeps only notice and above (LogLevelMax=notice),
 # so a timer run that changes nothing leaves no line in the journal; updates and errors still do.
-_prio() { [[ -n "${JOURNAL_STREAM:-}" ]] && printf '<%s>' "$1"; }
+# Only when stdout really is that journal stream: JOURNAL_STREAM ("device:inode") is inherited by
+# everything a service starts, e.g. a shell inside a CI runner, where the prefix would be noise.
+TO_JOURNAL=0
+if [[ -n "${JOURNAL_STREAM:-}" ]] \
+    && [[ "$(stat -L -c '%d:%i' "/proc/$$/fd/1" 2>/dev/null)" == "$JOURNAL_STREAM" ]]; then
+    TO_JOURNAL=1
+fi
+_prio() { (( TO_JOURNAL )) && printf '<%s>' "$1"; }
 say()  { printf '%s\n' "$*"; }
 say_notice() { printf '%s%s\n' "$(_prio 5)" "$*"; } # changes: updates, provider answers, events
 say_debug()  { printf '%s%s\n' "$(_prio 7)" "$*"; } # routine: "unchanged"

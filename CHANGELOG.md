@@ -16,6 +16,9 @@ versions: [Semantic Versioning](https://semver.org/).
 - Log: an address change that falls on the daily verification time (e.g. a router that reconnects
   at the same time every night) was logged as "periodic verification". It now shows as a change.
 - Log: no stray blank before the closing bracket in "watch: address changed (...)".
+- Priority prefixes (`<3>ERROR`, `<4>WARN` ...) appeared in plain output when `JOURNAL_STREAM` was
+  only inherited (e.g. a shell started from a service, a CI runner). They are now written only
+  when stdout really is the journal stream named there.
 
 ## [1.5.0] - 2026-11-20
 

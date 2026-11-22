@@ -376,13 +376,23 @@ run
 expect "  ... a change at verification time is logged as a change" eval '! grep -q "periodic verification" <<< "$OUT" && grep -q "updating netcup" <<< "$OUT"'
 run --force
 expect "run --force always calls the provider" has "(forced)"
-JOURNAL_STREAM=1:1 run
+# run_journal ARGS...: like run, but stdout is a file posing as the journal stream (JOURNAL_STREAM
+# holds its device:inode, as systemd sets it), so the "<N>" priority prefixes are written.
+run_journal() {
+    : > "$TMP/journal"
+    JOURNAL_STREAM=$(stat -c '%d:%i' "$TMP/journal") DDNS_CONFIG_DIR="$D/etc" \
+        DDNS_CREDENTIALS_DIR="$D/creds" DDNS_STATE_DIR="$D/state" DDNS_RUNTIME_DIR="$D/run" \
+        "$ROOT/ddns-watch.sh" "$@" > "$TMP/journal" 2>&1
+    RC=$?
+    OUT=$(< "$TMP/journal")
+}
+run_journal
 expect "journal: 'unchanged' is debug (dropped by the IPv4 unit's LogLevelMax=notice)" has "<7>unchanged IPv4="
 sed -i "s/^IPV4=.*/IPV4=203.0.113.99/" "$D/state/last"
-JOURNAL_STREAM=1:1 run
+run_journal
 expect "  ... update and provider answer are notice" eval 'grep -q "^<5>updating netcup " <<< "$OUT" && grep -q "^<5>netcup: " <<< "$OUT"'
-run
-expect "  ... no prefix outside the journal" eval '[[ "$OUT" == unchanged* ]]'
+JOURNAL_STREAM=1:1 run
+expect "  ... inherited JOURNAL_STREAM but stdout elsewhere -> no prefix" eval '[[ "$OUT" == unchanged* ]]'
 expect "  ... IPv4 unit keeps only notice and above" grep -qx "LogLevelMax=notice" "$ROOT/systemd/ddns-watch-ipv4.service"
 
 echo "== test-notify, Gotify"
