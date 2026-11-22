@@ -88,7 +88,7 @@ Only one hostname is updated. Make other names `CNAME`s to it, e.g. `www.example
 | secrets | `/etc/ddns-watch/credentials/` (encrypted, root only) |
 | state | `/var/lib/ddns-watch/` |
 | services | `ddns-watch.service` (watcher), `ddns-watch-ipv4.timer` (IPv4 check) |
-| log | `journalctl -u ddns-watch -u ddns-watch-ipv4` |
+| log | `journalctl -u ddns-watch -u ddns-watch-ipv4` (the IPv4 check logs only updates, warnings and errors, not every unchanged run) |
 
 The config is plain `KEY=value` and is never executed. It is read on every run, so changes apply
 without a restart: a change of hostname, records or provider settings (zone, TTL ...) triggers an

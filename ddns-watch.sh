@@ -62,9 +62,13 @@ USER_FORCE=0
 
 # ---------------------------------------------------------------- messages
 
-# Under systemd a "<N>" prefix sets the journal priority (3 = error, 4 = warning).
+# Under systemd a "<N>" prefix sets the journal priority (3 = error, 4 = warning, 5 = notice,
+# 6 = info, 7 = debug). ddns-watch-ipv4.service keeps only notice and above (LogLevelMax=notice),
+# so a timer run that changes nothing leaves no line in the journal; updates and errors still do.
 _prio() { [[ -n "${JOURNAL_STREAM:-}" ]] && printf '<%s>' "$1"; }
 say()  { printf '%s\n' "$*"; }
+say_notice() { printf '%s%s\n' "$(_prio 5)" "$*"; } # changes: updates, provider answers, events
+say_debug()  { printf '%s%s\n' "$(_prio 7)" "$*"; } # routine: "unchanged"
 warn() { printf '%sWARN: %s\n' "$(_prio 4)" "$*" >&2; }
 err()  { printf '%sERROR: %s\n' "$(_prio 3)" "$*" >&2; }
 die()  { err "$*"; exit 1; }
@@ -866,17 +870,17 @@ _update_once_locked() {
 
     if [[ "$FORCE" -ne 1 ]]; then
         if [[ "$ipv4" == "$LAST_IPV4" && "$ipv6" == "$LAST_IPV6" ]]; then
-            say "unchanged IPv4=${ipv4:-none} IPv6=${ipv6:-none}"
+            say_debug "unchanged IPv4=${ipv4:-none} IPv6=${ipv6:-none}"
             heartbeat
             return 0
         fi
         if [[ -n "$ipv4" && -z "$ipv6" && "$ipv4" == "$LAST_IPV4" ]]; then
-            say "unchanged IPv4=$ipv4 (no IPv6 this run)"
+            say_debug "unchanged IPv4=$ipv4 (no IPv6 this run)"
             heartbeat
             return 0
         fi
         if [[ -z "$ipv4" && -n "$ipv6" && "$ipv6" == "$LAST_IPV6" ]]; then
-            say "unchanged IPv6=$ipv6 (no IPv4 this run)"
+            say_debug "unchanged IPv6=$ipv6 (no IPv4 this run)"
             heartbeat
             return 0
         fi
@@ -889,11 +893,11 @@ _update_once_locked() {
         return 0
     fi
 
-    say "updating $PROVIDER for $DDNS_HOSTNAME: IPv4=${ipv4:-none} IPv6=${ipv6:-none}${why:+ ($why)}"
+    say_notice "updating $PROVIDER for $DDNS_HOSTNAME: IPv4=${ipv4:-none} IPv6=${ipv6:-none}${why:+ ($why)}"
     PROVIDER_RESPONSE=""
     PROVIDER_ERROR_CLASS="temporary"
     if provider_update "$ipv4" "$ipv6"; then
-        say "$PROVIDER: $PROVIDER_RESPONSE"
+        say_notice "$PROVIDER: $PROVIDER_RESPONSE"
         clear_failure
         if ! write_state "$ipv4" "$ipv6" "$now"; then
             # The DNS record is right, but without the state the next run calls the provider
@@ -1073,7 +1077,7 @@ notify() {
         ok=0
     fi
     if [[ "$ok" -eq 0 ]]; then
-        say "notification sent ($type): $1"
+        say_notice "notification sent ($type): $1"
         return 0
     fi
     warn "could not send the notification ($type)"
@@ -2018,7 +2022,7 @@ watch_loop() {
             done
             now=$(local_addresses)
             [[ "$now" == "$seen" ]] && continue
-            say "watch: address changed (${now//$'\n'/ }), running updater"
+            say_notice "watch: address changed (${now//$'\n'/ }), running updater"
             seen="$now"
             update_once || true
             continue

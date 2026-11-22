@@ -5,6 +5,13 @@ versions: [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Quieter journal: the IPv4 check (`ddns-watch-ipv4.service`, about once a minute with UPnP) now
+  logs only updates, warnings and errors (`LogLevelMax=notice`), not "unchanged" or systemd's
+  start/finish lines for every run. Before, that was about 4000 lines a day. Updates, provider
+  answers, address changes and sent notifications are logged as notice, "unchanged" as debug.
+  `ddns-watch run` in a terminal prints everything as before.
+
 ### Fixed
 - Log: an address change that falls on the daily verification time (e.g. a router that reconnects
   at the same time every night) was logged as "periodic verification". It now shows as a change.

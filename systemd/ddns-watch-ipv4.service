@@ -11,6 +11,10 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/ddns-watch run
+# Runs every minute or so: keep only updates, warnings and errors in the journal. This also drops
+# systemd's own "Starting/Finished" lines for this unit. To see every run for a while:
+# systemctl edit ddns-watch-ipv4.service  ->  [Service] LogLevelMax=debug
+LogLevelMax=notice
 
 ConfigurationDirectory=ddns-watch
 StateDirectory=ddns-watch

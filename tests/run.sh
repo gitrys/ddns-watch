@@ -376,6 +376,14 @@ run
 expect "  ... a change at verification time is logged as a change" eval '! grep -q "periodic verification" <<< "$OUT" && grep -q "updating netcup" <<< "$OUT"'
 run --force
 expect "run --force always calls the provider" has "(forced)"
+JOURNAL_STREAM=1:1 run
+expect "journal: 'unchanged' is debug (dropped by the IPv4 unit's LogLevelMax=notice)" has "<7>unchanged IPv4="
+sed -i "s/^IPV4=.*/IPV4=203.0.113.99/" "$D/state/last"
+JOURNAL_STREAM=1:1 run
+expect "  ... update and provider answer are notice" eval 'grep -q "^<5>updating netcup " <<< "$OUT" && grep -q "^<5>netcup: " <<< "$OUT"'
+run
+expect "  ... no prefix outside the journal" eval '[[ "$OUT" == unchanged* ]]'
+expect "  ... IPv4 unit keeps only notice and above" grep -qx "LogLevelMax=notice" "$ROOT/systemd/ddns-watch-ipv4.service"
 
 echo "== test-notify, Gotify"
 mock_reset; new_case netcup
