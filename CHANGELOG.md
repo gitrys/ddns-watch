@@ -3,6 +3,14 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Installer, `update`, `setup`, `set-secret` and `uninstall` say "Reloading systemd ..." before
+  `systemctl daemon-reload`, and the installer says "Restarting ddns-watch.service ..." before the
+  restart. A reload can take 90 s when a network mount does not answer (e.g. NFS to a sleeping
+  NAS); before, the output simply stopped and looked stuck. ([#1](https://github.com/gitrys/ddns-watch/issues/1))
+
 ## [1.6.0] - 2026-11-22
 
 Quieter journal and log fixes, found in the first days of live use.

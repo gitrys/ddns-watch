@@ -41,6 +41,13 @@ done
 say() { printf '%s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+# reload_systemd: "systemctl daemon-reload", announced first. It reruns all unit generators, and a
+# network mount that does not answer (e.g. NFS "hard" to a sleeping NAS) can hold it for 90 s.
+reload_systemd() {
+    say "Reloading systemd (can take a while if a network mount does not answer) ..."
+    systemctl daemon-reload
+}
+
 # Questions go to the terminal even when this script is piped into bash.
 confirm() {
     [[ "$YES" -eq 1 ]] && return 0
@@ -165,7 +172,7 @@ if [[ ${#old[@]} -gt 0 ]]; then
     for u in "${old[@]}"; do
         rm -f -- "$UNIT_DIR/$u"
     done
-    systemctl daemon-reload || true
+    reload_systemd || true
     say "Old units removed."
 fi
 
@@ -184,12 +191,13 @@ for u in ddns-watch.service ddns-watch-ipv4.service ddns-watch-ipv4.timer; do
 done
 install -d -m 755 "$CONFIG_DIR"
 install -d -m 700 "$CONFIG_DIR/credentials"
-systemctl daemon-reload
+reload_systemd
 
 # restart_and_verify: restarts the watcher if it was enabled and checks that it really runs.
 # A silently dead updater would only be noticed at the next IP change.
 restart_and_verify() {
     systemctl is-enabled --quiet ddns-watch.service 2>/dev/null || return 0
+    say "Restarting ddns-watch.service ..."
     systemctl restart ddns-watch.service >/dev/null 2>&1 || true
     sleep "${DDNS_VERIFY_WAIT:-3}"
     if systemctl is-active --quiet ddns-watch.service 2>/dev/null; then

@@ -80,6 +80,14 @@ warn() { printf '%sWARN: %s\n' "$(_prio 4)" "$*" >&2; }
 err()  { printf '%sERROR: %s\n' "$(_prio 3)" "$*" >&2; }
 die()  { err "$*"; exit 1; }
 
+# reload_systemd [PRINTER]: "systemctl daemon-reload", announced first (with PRINTER, default say).
+# It reruns all unit generators, and a network mount that does not answer (e.g. NFS "hard" to a
+# sleeping NAS) can hold it for 90 s; without a note the command looks stuck.
+reload_systemd() {
+    "${1:-say}" "Reloading systemd (can take a while if a network mount does not answer) ..."
+    systemctl daemon-reload
+}
+
 usage() {
     cat << 'EOF'
 Usage: ddns-watch [run] [--force]     update the DNS record if the IPs changed
@@ -747,7 +755,7 @@ set_secret() {
     value=""
 
     write_cred_dropin
-    systemctl daemon-reload 2>/dev/null || warn "systemctl daemon-reload failed"
+    reload_systemd 2>/dev/null || warn "systemctl daemon-reload failed"
     systemctl try-restart ddns-watch.service 2>/dev/null || true
 
     systemd-creds has-tpm2 >/dev/null 2>&1 && key="this machine's TPM and host key"
@@ -1722,7 +1730,8 @@ setup() {
         printf '# Written by "ddns-watch setup".\n[Timer]\nOnBootSec=\nOnUnitActiveSec=\nOnBootSec=2min\nOnUnitActiveSec=%ss\n' \
             "$interval" > "$UNIT_DIR/ddns-watch-ipv4.timer.d/interval.conf"
     fi
-    systemctl daemon-reload
+    reload_systemd s_info
+    s_info "Starting the services ..."
     if systemctl enable --now ddns-watch.service ddns-watch-ipv4.timer >/dev/null 2>&1; then
         systemctl restart ddns-watch.service 2>/dev/null || true
         # A running timer keeps its old schedule until it is restarted.
@@ -1892,7 +1901,7 @@ uninstall() {
         rm -f -- "$UNIT_DIR/$u"
         rm -rf -- "${UNIT_DIR:?}/$u.d"
     done
-    systemctl daemon-reload 2>/dev/null || true
+    reload_systemd 2>/dev/null || true
     rm -f -- "$PREFIX/bin/ddns-watch"
     rm -rf -- "${PREFIX:?}/lib/ddns-watch"
     if [[ "$purge" -eq 1 ]]; then

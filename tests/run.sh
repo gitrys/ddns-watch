@@ -512,6 +512,7 @@ expect "  ... login tested against the provider" has "Login OK"
 expect "  ... records shown compactly (A, CNAMEs in one line)" eval '[[ "$OUT" == *"Current records for example.com"* && "$OUT" == *"CNAME  www"* ]]'
 expect "  ... progress bar and summary box" eval '[[ "$OUT" == *"Step 6 of 6"* && "$OUT" == *"Summary"* ]]'
 expect "  ... first check ok -> 'ddns-watch is running.'" has "ddns-watch is running."
+expect "  ... daemon-reload is announced" has "Reloading systemd (can take a while"
 expect "  ... notification type detected, test sent" eval '[[ "$OUT" == *"Test notification sent"* ]] && [ "$(mock_state "[.notify[] | select(.title==\"ddns-watch test\")] | length")" = 1 ]'
 expect "  ... config written" eval 'conf_has PROVIDER=netcup && conf_has HOSTNAME=example.com && conf_has IFACE=lo'
 expect "  ... IPv4 source suggested: dns (no router answer)" eval 'conf_has IPV4_SOURCE=dns && conf_has IPV4_INTERVAL=300'
@@ -703,6 +704,7 @@ STUB_ACTIVE=no inst --upgrade --yes
 expect "upgrade: service not running afterwards -> error, rc 1" eval '[[ "$RC" == 1 && "$OUT" == *"is not running after the update"* ]]'
 inst --upgrade --yes
 expect "upgrade: running service is confirmed" has "ddns-watch.service is running"
+expect "  ... slow steps are announced (daemon-reload, restart)" eval '[[ "$OUT" == *"Reloading systemd (can take a while"* && "$OUT" == *"Restarting ddns-watch.service ..."* ]]'
 
 echo "== second review fixes"
 # B: the login test sees settings that the setup does not ask again (here NETCUP_API=rest)
