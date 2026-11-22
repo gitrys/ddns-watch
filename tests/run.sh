@@ -376,13 +376,13 @@ run
 expect "  ... a change at verification time is logged as a change" eval '! grep -q "periodic verification" <<< "$OUT" && grep -q "updating netcup" <<< "$OUT"'
 run --force
 expect "run --force always calls the provider" has "(forced)"
-# run_journal ARGS...: like run, but stdout is a file posing as the journal stream (JOURNAL_STREAM
-# holds its device:inode, as systemd sets it), so the "<N>" priority prefixes are written.
+# run_journal: like "run" (no arguments), but stdout is a file posing as the journal stream
+# (JOURNAL_STREAM holds its device:inode, as systemd sets it), so the "<N>" prefixes are written.
 run_journal() {
     : > "$TMP/journal"
     JOURNAL_STREAM=$(stat -c '%d:%i' "$TMP/journal") DDNS_CONFIG_DIR="$D/etc" \
         DDNS_CREDENTIALS_DIR="$D/creds" DDNS_STATE_DIR="$D/state" DDNS_RUNTIME_DIR="$D/run" \
-        "$ROOT/ddns-watch.sh" "$@" > "$TMP/journal" 2>&1
+        "$ROOT/ddns-watch.sh" > "$TMP/journal" 2>&1
     RC=$?
     OUT=$(< "$TMP/journal")
 }
