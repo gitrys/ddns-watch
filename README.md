@@ -144,6 +144,9 @@ record that is no longer wanted by hand at your provider.
   Healthchecks.io check or an Uptime Kuma push monitor. When the calls stop, that service tells
   you the machine or the service is down.
 - Test both: `sudo ddns-watch test-notify`.
+- **New release:** once a day the service asks GitHub for the newest release. A newer one is
+  logged and, with `NOTIFY_URL`, sent once as a low-priority message. Nothing is installed by
+  itself: run `sudo ddns-watch update`. Off with `UPDATE_CHECK=no` (no daily request to GitHub).
 
 **Step-by-step guide: [docs/notifications.md](docs/notifications.md)** (ntfy, Gotify, Discord, Slack,
 Healthchecks.io, Uptime Kuma).

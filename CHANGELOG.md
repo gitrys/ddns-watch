@@ -3,6 +3,14 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Update notice: once a day the service asks GitHub for the newest release. A newer one is logged
+  ("update available: ddns-watch X.Y.Z ...") and, with `NOTIFY_URL`, sent once per version as a
+  low-priority message. Nothing is installed automatically (`sudo ddns-watch update`). Off with
+  `UPDATE_CHECK=no` in the config. A failed lookup waits a day too; development builds never check.
+
 ## [1.7.0] - 2026-11-22
 
 The installer and the commands that reload systemd say what they are waiting for.

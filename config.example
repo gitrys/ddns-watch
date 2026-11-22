@@ -25,6 +25,7 @@ HOSTNAME=home.example.com       # the name whose A/AAAA records follow this mach
 #NOTIFY_AFTER=15                # minutes of temporary errors before notifying
                                 # optional token: sudo ddns-watch set-secret notify-token
 #HEARTBEAT_URL=secret          # called after every good run; URL: sudo ddns-watch set-secret heartbeat-url
+#UPDATE_CHECK=yes               # once a day ask GitHub for a new release; log + notify once (no = off)
 
 # --- provider settings (only those of the active PROVIDER are used)
 # netcup  (secret: netcup-api-key; legacy API: netcup-legacy-key + netcup-legacy-password)

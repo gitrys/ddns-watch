@@ -269,7 +269,7 @@ other_provider_key() {
 
 # ---------------------------------------------------------------- config
 
-CORE_KEYS=" IFACE PROVIDER HOSTNAME RECORDS IPV4_SOURCE IPV4_FALLBACK UPNP_URL IPV4_COMMAND IPV6_SUFFIX NOTIFY_URL NOTIFY_TYPE NOTIFY_AFTER HEARTBEAT_URL IPV4_INTERVAL "
+CORE_KEYS=" IFACE PROVIDER HOSTNAME RECORDS IPV4_SOURCE IPV4_FALLBACK UPNP_URL IPV4_COMMAND IPV6_SUFFIX NOTIFY_URL NOTIFY_TYPE NOTIFY_AFTER HEARTBEAT_URL IPV4_INTERVAL UPDATE_CHECK "
 
 # parse_config -> associative array CFG. Nothing is expanded or executed.
 parse_config() {
@@ -390,6 +390,12 @@ load_config() {
     esac
     NOTIFY_AFTER="${CFG[NOTIFY_AFTER]:-15}"
     number_setting NOTIFY_AFTER 0 99999 "minutes" || return 1
+    UPDATE_CHECK="${CFG[UPDATE_CHECK]:-yes}"
+    UPDATE_CHECK="${UPDATE_CHECK,,}"
+    case "$UPDATE_CHECK" in
+        yes|no) ;;
+        *) err "UPDATE_CHECK=$UPDATE_CHECK in $CONFIG_FILE must be yes or no"; return 1 ;;
+    esac
     IPV4_INTERVAL="${CFG[IPV4_INTERVAL]:-}"
     if [[ -n "$IPV4_INTERVAL" ]]; then
         number_setting IPV4_INTERVAL 10 86400 "seconds" || return 1
@@ -807,7 +813,10 @@ update_once() {
     (
         flock 9
         load_config || exit 1
-        _update_once_locked
+        rc=0
+        _update_once_locked || rc=$?
+        check_for_update
+        exit "$rc"
     ) 9>"$LOCKFILE"
 }
 
@@ -933,6 +942,8 @@ _update_once_locked() {
 
 FAILURE="$STATE_DIR/failure"
 HEARTBEAT_STAMP="$STATE_DIR/heartbeat"
+UPDATE_STAMP="$STATE_DIR/update-check"       # when GitHub was last asked for a new release
+UPDATE_NOTIFIED="$STATE_DIR/update-notified" # the release version already announced
 VERIFY_INTERVAL=86400
 
 load_failure() {
@@ -1049,7 +1060,7 @@ json_escape() {
     printf '%s' "${s//$'\r'/}"
 }
 
-# notify TITLE PRIORITY(default|high) TAGS MESSAGE: sends the message to NOTIFY_URL.
+# notify TITLE PRIORITY(low|default|high) TAGS MESSAGE: sends the message to NOTIFY_URL.
 #   ntfy (and any webhook that takes a text body): text POST, ntfy headers Title/Priority/Tags,
 #        optional secret notify-token as "Authorization: Bearer".
 #   gotify:  JSON {title, message, priority} to .../message, secret notify-token as X-Gotify-Key.
@@ -1072,7 +1083,7 @@ notify() {
     case "$type" in
         gotify)
             [[ -n "$token" ]] && cfg+=$'\n'"header = \"X-Gotify-Key: $(curl_cfg_escape "$token")\""
-            body="{\"title\":\"$(json_escape "$1")\",\"message\":\"$(json_escape "$4")\",\"priority\":$([[ "$2" == high ]] && echo 8 || echo 5)}"
+            body="{\"title\":\"$(json_escape "$1")\",\"message\":\"$(json_escape "$4")\",\"priority\":$(case "$2" in high) echo 8 ;; low) echo 2 ;; *) echo 5 ;; esac)}"
             ;;
         discord)
             body="{\"username\":\"ddns-watch\",\"content\":\"$(json_escape "$prefix**$1**"$'\n'"$4")\"}"
@@ -1120,6 +1131,32 @@ heartbeat() {
     else
         warn "heartbeat to HEARTBEAT_URL failed"
     fi
+}
+
+# check_for_update: at most once a day, asks GitHub for the newest release. A newer one is logged
+# and notified (NOTIFY_URL, low priority) once per version; nothing is installed automatically.
+# Off with UPDATE_CHECK=no. Development builds ("-dev") never check.
+check_for_update() {
+    [[ "$UPDATE_CHECK" == yes && "$VERSION" != *-* && -w "$STATE_DIR" ]] || return 0
+    local now last=0 latest told=""
+    now=$(date +%s)
+    [[ -f "$UPDATE_STAMP" ]] && last=$(< "$UPDATE_STAMP")
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    (( now - last >= 86400 )) || return 0
+    # Stamped before asking: also a failed lookup waits a day (GitHub down must not cost every run).
+    printf '%s\n' "$now" > "$UPDATE_STAMP" 2>/dev/null || return 0
+    latest=$(latest_version)
+    [[ -n "$latest" ]] && version_lt "$VERSION" "$latest" || return 0
+    [[ -f "$UPDATE_NOTIFIED" ]] && told=$(< "$UPDATE_NOTIFIED")
+    [[ "$told" == "$latest" ]] && return 0
+    say_notice "update available: ddns-watch $latest (installed: $VERSION). Install it with: sudo ddns-watch update"
+    if [[ -n "$NOTIFY_URL" ]]; then
+        # Not sent (provider down ...): tried again with the next daily check.
+        notify "ddns-watch $latest available" low "arrow_up" \
+            "ddns-watch $latest is available on $(hostname) (installed: $VERSION). Install it with: sudo ddns-watch update. Changes: https://github.com/$REPO/releases/tag/v$latest" \
+            || return 0
+    fi
+    printf '%s\n' "$latest" > "$UPDATE_NOTIFIED" 2>/dev/null || true
 }
 
 # test-notify: sends a test notification and a heartbeat ping now and reports the result.

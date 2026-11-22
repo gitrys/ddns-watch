@@ -773,6 +773,55 @@ OUT=$(CREDENTIALS_DIRECTORY="$D/svc-creds" DDNS_CONFIG_DIR="$D/etc" DDNS_STATE_D
     timeout 30 "$ROOT/ddns-watch.sh" run 2>&1); RC=$?
 expect "  ... and the service explains what to do" has "the service was not given this secret"
 
+echo "== update notice"
+# A release build (this checkout is "-dev", which never checks): same script, version stamped.
+# run_stamped: "ddns-watch run" with that build.
+mkdir -p "$TMP/stamped"
+sed 's/^VERSION=.*/VERSION="9.9.9"/' "$ROOT/ddns-watch.sh" > "$TMP/stamped/ddns-watch.sh"
+chmod +x "$TMP/stamped/ddns-watch.sh"
+run_stamped() {
+    OUT=$(DDNS_PROVIDERS_DIR="$ROOT/providers" DDNS_CONFIG_DIR="$D/etc" DDNS_CREDENTIALS_DIR="$D/creds" \
+        DDNS_STATE_DIR="$D/state" DDNS_RUNTIME_DIR="$D/run" timeout 30 "$TMP/stamped/ddns-watch.sh" run 2>&1)
+    RC=$?
+    printf '%s\n' "$OUT" >> "$TMP/all-output.log"
+}
+mock_release() { curl -s -X POST -H 'Content-Type: application/json' -d "{\"mode\":\"normal\",\"release\":\"$1\"}" "$MOCK/_reset" >/dev/null; }
+update_notices() { mock_state '[.notify[] | select(.title | test("available"))] | length'; }
+due_again() { echo 0 > "$D/state/update-check"; rm -f "$D/state/latest-version"; }
+
+new_case netcup
+run
+expect "development build: no update check" [ ! -e "$D/state/update-check" ]
+printf 'NOTIFY_URL=%s/notify\n' "$MOCK" >> "$D/etc/config"
+mock_release 9.9.10
+run_stamped
+expect "newer release -> logged" has "update available: ddns-watch 9.9.10 (installed: 9.9.9)"
+expect "  ... and notified once, low priority" [ "$(mock_state '[.notify[] | select(.title=="ddns-watch 9.9.10 available" and .priority=="low")] | length')" = 1 ]
+expect "  ... the update run itself still works" eval '[[ "$RC" == 0 ]] && grep -q "^IPV4=" "$D/state/last"'
+run_stamped
+expect "  ... not asked again within a day" eval '[[ "$OUT" != *"update available"* && "$(update_notices)" == 1 ]]'
+due_again
+run_stamped
+expect "  ... next day, same release: no second message" eval '[[ "$OUT" != *"update available"* && "$(update_notices)" == 1 ]]'
+mock_release 9.9.11; due_again
+run_stamped
+expect "  ... next release: notified again" [ "$(mock_state '[.notify[] | select(.title=="ddns-watch 9.9.11 available")] | length')" = 1 ]
+mock_release 9.9.12; due_again
+echo 'UPDATE_CHECK=no' >> "$D/etc/config"
+run_stamped
+expect "UPDATE_CHECK=no: GitHub not asked, nothing sent" eval '[[ "$(cat "$D/state/update-check")" == 0 && "$(update_notices)" == 0 ]]'
+sed -i 's/^UPDATE_CHECK=no$/UPDATE_CHECK=maybe/' "$D/etc/config"
+run_stamped
+expect "UPDATE_CHECK must be yes or no" has "must be yes or no"
+sed -i '/^UPDATE_CHECK=/d' "$D/etc/config"
+mock_release 9.9.9; due_again
+run_stamped
+expect "same version as installed: no message" eval '[[ "$OUT" != *"update available"* && "$(update_notices)" == 0 ]]'
+mock_release 9.9.13; due_again
+DDNS_RELEASE_API="$MOCK/no-such-release" run_stamped
+expect "release lookup fails -> no message, next try in a day" eval '[[ "$RC" == 0 && "$OUT" != *"update available"* && "$(cat "$D/state/update-check")" != 0 ]]'
+mock_reset
+
 echo "== plugin interface"
 plugin_lint() ( # plugin_lint NAME: source the core, load the plugin, check the rules from CONTRIBUTING.md
     # shellcheck source=/dev/null

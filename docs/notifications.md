@@ -27,6 +27,8 @@ command line.
   hostname). ddns-watch then stops trying until you change the config or the key.
 - **After `NOTIFY_AFTER` minutes** (default 15) of temporary errors (provider down, no internet).
 - **Once more** when it works again.
+- **Once per new release** (low priority): "ddns-watch X.Y.Z available", with the command to
+  install it (`sudo ddns-watch update`). Checked at most once a day; off with `UPDATE_CHECK=no`.
 
 No messages on normal days: no news is good news. For "it is still alive" use the heartbeat.
 
@@ -131,6 +133,7 @@ NOTIFY_URL=secret         # the URL itself: sudo ddns-watch set-secret notify-ur
 NOTIFY_TYPE=auto          # auto | ntfy | gotify | discord | slack
 NOTIFY_AFTER=15           # minutes of temporary errors before a message
 HEARTBEAT_URL=secret      # the URL itself: sudo ddns-watch set-secret heartbeat-url
+UPDATE_CHECK=yes          # message once per new release (no = never ask GitHub)
 ```
 
 A plain URL instead of `secret` also works (then it is readable in the config file).
