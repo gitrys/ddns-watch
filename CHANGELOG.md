@@ -3,7 +3,9 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.6.0] - 2026-11-22
+
+Quieter journal and log fixes, found in the first days of live use.
 
 ### Changed
 - Quieter journal: the IPv4 check (`ddns-watch-ipv4.service`, about once a minute with UPnP) now
