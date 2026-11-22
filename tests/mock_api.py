@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
 """One mock server for all three provider APIs used by ddns-watch.sh (tests only).
 
   GET  /nic/update                      Strato dyndns2 (basic auth)

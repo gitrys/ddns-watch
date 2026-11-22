@@ -2,6 +2,7 @@
 # Runs ddns-watch.sh against tests/mock_api.py (Strato, netcup legacy, netcup REST).
 # Needs: bash, python3, curl, jq, flock. No network access, no root, touches nothing outside tests/tmp.
 # Config, secrets, state and locks live in per-case directories passed via DDNS_*_DIR.
+# Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
