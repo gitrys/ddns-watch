@@ -3,7 +3,9 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.7.0] - 2026-11-22
+
+The installer and the commands that reload systemd say what they are waiting for.
 
 ### Changed
 - Installer, `update`, `setup`, `set-secret` and `uninstall` say "Reloading systemd ..." before
