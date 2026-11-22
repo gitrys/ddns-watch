@@ -29,7 +29,7 @@
 # Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
 # This program comes with ABSOLUTELY NO WARRANTY; see LICENSE (GNU GPL v3 or later).
 
-VERSION="1.7.0-dev"   # on main: the next version; releases set the real one
+VERSION="1.8.0-dev"   # on main: the next version; releases set the real one
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
