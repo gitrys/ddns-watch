@@ -3,7 +3,9 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.8.0] - 2026-11-22
+
+The service tells you when a new release is out.
 
 ### Added
 - Update notice: once a day the service asks GitHub for the newest release. A newer one is logged
