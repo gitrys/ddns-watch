@@ -857,7 +857,11 @@ _update_once_locked() {
     fi
     if [[ "$FORCE" -ne 1 && -n "$LAST_CALLED" ]] && (( now - LAST_CALLED >= verify_every )); then
         FORCE=1
-        why="periodic verification"
+        # Only say so when nothing changed: a daily reconnect at the same time of day lands on the
+        # verification time, and the log should then show it as the address change it is.
+        if [[ ( -z "$ipv4" || "$ipv4" == "$LAST_IPV4" ) && ( -z "$ipv6" || "$ipv6" == "$LAST_IPV6" ) ]]; then
+            why="periodic verification"
+        fi
     fi
 
     if [[ "$FORCE" -ne 1 ]]; then
@@ -2014,7 +2018,7 @@ watch_loop() {
             done
             now=$(local_addresses)
             [[ "$now" == "$seen" ]] && continue
-            say "watch: address changed ($(tr '\n' ' ' <<< "$now")), running updater"
+            say "watch: address changed (${now//$'\n'/ }), running updater"
             seen="$now"
             update_once || true
             continue

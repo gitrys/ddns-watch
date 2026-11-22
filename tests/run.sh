@@ -371,6 +371,9 @@ expect "  ... recovery notified" [ "$(mock_state '[.notify[] | select(.title=="D
 sed -i "s/^CALLED=.*/CALLED=$(( $(date +%s) - 90000 ))/" "$D/state/last"
 run
 expect "once a day the record is verified even if unchanged" has "periodic verification"
+sed -i -e "s/^CALLED=.*/CALLED=$(( $(date +%s) - 90000 ))/" -e "s/^IPV4=.*/IPV4=203.0.113.99/" "$D/state/last"
+run
+expect "  ... a change at verification time is logged as a change" eval '! grep -q "periodic verification" <<< "$OUT" && grep -q "updating netcup" <<< "$OUT"'
 run --force
 expect "run --force always calls the provider" has "(forced)"
 
@@ -467,6 +470,7 @@ printf '%s\n' '    inet6 2a03:4000:2::67c:16ff:fedf:a200/64 scope global dynamic
 run_v6 watch
 expect "watch: event without change -> no update run" eval '[[ "$(grep -c "address changed" <<< "$OUT")" == 1 ]]'
 expect "  ... prefix change -> update" zone_has @ AAAA '["2a03:4000:2::67c:16ff:fedf:a200"]'
+expect "  ... log line lists the address without a trailing blank" has "address changed (2a03:4000:2::67c:16ff:fedf:a200), running"
 
 echo "== guided setup"
 # run_setup INPUT_LINES...: answers the prompts in order (DDNS_SETUP_INPUT replaces the terminal)

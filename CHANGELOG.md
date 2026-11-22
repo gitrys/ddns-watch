@@ -3,6 +3,13 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Log: an address change that falls on the daily verification time (e.g. a router that reconnects
+  at the same time every night) was logged as "periodic verification". It now shows as a change.
+- Log: no stray blank before the closing bracket in "watch: address changed (...)".
+
 ## [1.5.0] - 2026-11-20
 
 Fixes from a second external code review.
