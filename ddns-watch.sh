@@ -999,8 +999,9 @@ config_fingerprint() {
 
 # record_failure CLASS MESSAGE NOW FINGERPRINT [nowait|network]: remembers the error, sets the
 # earliest time for the next try (1, 2, 5, then every 10 min; "network": 10, 20, 30 s, 1, 2, 5, then
-# every 10 min; "nowait": at once) and notifies (permanent: at once; temporary: after NOTIFY_AFTER).
-# The try itself happens at the next run (watcher retry, timer or address event).
+# every 10 min; "nowait": at once, stored as NEXT=0) and notifies (permanent: at once; temporary:
+# after NOTIFY_AFTER). The try itself happens at the next run (watcher retry, timer or address
+# event); the watcher only runs retries with a time (NEXT > 0) by itself.
 record_failure() {
     local delays=(60 120 300 600)
     [[ "${5:-}" == network ]] && delays=(10 20 30 60 120 300 600)
@@ -1013,7 +1014,7 @@ record_failure() {
     local i=$((FAIL_COUNT - 1))
     (( i < ${#delays[@]} )) || i=$((${#delays[@]} - 1))
     FAIL_NEXT=$(($3 + delays[i]))
-    [[ "${5:-}" == nowait ]] && FAIL_NEXT="$3"
+    [[ "${5:-}" == nowait ]] && FAIL_NEXT=0
     if [[ "$FAIL_NOTIFIED" -ne 1 ]]; then
         if [[ "$FAIL_CLASS" == permanent ]]; then
             notify "DNS update rejected" high "warning" \
@@ -1885,8 +1886,10 @@ show_status() {
         say "FAILING:   since $(date -d "@$FAIL_SINCE" "+%F %T"), $FAIL_COUNT attempts, $FAIL_CLASS: $FAIL_MSG"
         if [[ "$FAIL_CLASS" == permanent ]]; then
             say "           no retries until the config or a secret changes (or: ddns-watch run --force)"
-        else
+        elif (( FAIL_NEXT > 0 )); then
             say "           next retry after $(date -d "@$FAIL_NEXT" "+%T")"
+        else
+            say "           next retry at the next run (address change or timer)"
         fi
     fi
     [[ -n "$NOTIFY_URL" ]] && say "Notify:    $([[ "$NOTIFY_URL" == secret ]] && echo "URL stored encrypted" || echo "$NOTIFY_URL") (type ${NOTIFY_TYPE}, after $NOTIFY_AFTER min of errors)"
@@ -2073,7 +2076,7 @@ watch_loop() {
     # The monitor starts before the first update, and "seen" is taken before it too: an address
     # that arrives while the first update runs (at boot, IPv6 often comes a few seconds after
     # IPv4) is then noticed as a change instead of being taken as already published.
-    local seen now rc mon_pid watch_fp tmo wait pending=""
+    local seen now rc mon_pid watch_fp tmo next tried=""
     seen=$(local_addresses)
     watch_fp=$(watch_fingerprint)
     # (8>&-: the monitor must not inherit the watcher lock, or a restarted watcher finds it taken.)
@@ -2084,14 +2087,22 @@ watch_loop() {
     say "watch: monitoring $what on $IFACE"
 
     while true; do
-        # A failed update with a retry time ahead: wake up for it, so the retry does not wait for
-        # the timer (minutes) or an address event. ("nowait" errors have no time ahead: those are
-        # retried by address events and the timer, as before.)
+        # A failed update with a retry time: run the retry when it is due, so it does not wait for
+        # the timer (minutes) or an address event; until then, wake up for it. A retry that fell
+        # due before we looked (e.g. while the first update ran) is run at once. Each retry time
+        # is run only once: if the run leaves it unchanged (config unreadable ...), the timer
+        # takes over instead of a loop. ("nowait" errors have no time: those are retried by
+        # address events and the timer, as before.)
         tmo="$WATCH_TICK"
-        wait=$(watch_retry_wait)
-        if [[ -n "$wait" ]] && (( wait > 0 )); then
-            pending=1
-            [[ "$WATCH_TICK" =~ ^[0-9]+$ ]] && (( wait < WATCH_TICK )) && tmo="$wait"
+        next=$(watch_retry_next)
+        if [[ -n "$next" && "$next" != "$tried" ]]; then
+            now=$(date +%s)
+            if (( next <= now )); then
+                tried="$next"
+                update_once || true
+                continue
+            fi
+            [[ "$WATCH_TICK" =~ ^[0-9]+$ ]] && (( next - now < WATCH_TICK )) && tmo=$((next - now))
         fi
         if IFS= read -r -t "$tmo" -u 3 _; then
             while IFS= read -r -t "$DEBOUNCE_SEC" -u 3 _; do
@@ -2101,7 +2112,6 @@ watch_loop() {
             if [[ "$now" != "$seen" ]]; then
                 say_notice "watch: address changed (${now//$'\n'/ }), running updater"
                 seen="$now"
-                pending=""
                 update_once || true
             fi
         else
@@ -2118,25 +2128,19 @@ watch_loop() {
                 exec "$SELF" watch
             fi
         fi
-        if [[ -n "$pending" && "$(watch_retry_wait)" == 0 ]]; then
-            pending=""
-            update_once || true
-        fi
     done
 
     err "watch: ip monitor exited"
     return 1
 }
 
-# watch_retry_wait: seconds until the retry of a temporary error is due (0 = due now); prints
-# nothing if no temporary error is pending.
-watch_retry_wait() {
+# watch_retry_next: the time (epoch seconds) the pending temporary error is to be retried at;
+# nothing if there is none or it has no retry time ("nowait").
+watch_retry_next() {
     (
         load_failure
-        [[ "$FAIL_CLASS" == temporary ]] || exit 0
-        local now
-        now=$(date +%s)
-        if (( FAIL_NEXT > now )); then echo $((FAIL_NEXT - now)); else echo 0; fi
+        [[ "$FAIL_CLASS" == temporary ]] && (( FAIL_NEXT > 0 )) && echo "$FAIL_NEXT"
+        exit 0
     )
 }
 

@@ -19,6 +19,8 @@ router's DNS was not up yet, and the retry then waited for the IPv4 timer (2 min
 ### Fixed
 - netcup REST and dyndns2 providers: when the provider sent no answer, the log had an extra line
   "000" (curl's placeholder status code).
+- `ddns-watch status`: with no usable address, "next retry after" showed the time of the error. It
+  now says the next run (address change or timer) retries.
 
 ## [1.8.0] - 2026-11-22
 

@@ -514,6 +514,12 @@ STUB_MONITOR_TAIL=5 run_v6 watch
 expect "watch: waits for a pending retry" has "waiting to retry"
 expect "  ... then retries by itself" eval 'has "(retry 2)" && has "good netcup-rest"'
 expect "  ... failure cleared" [ ! -e "$D/state/failure" ]
+# No usable address: an error without a retry time; the watcher must not retry it in a loop.
+mock_reset; new_case netcup
+: > "$D/ip6"
+STUB_MONITOR_TAIL=3 DDNS_TEST_IPV4=none run_v6 watch
+expect "watch: no address -> no retry loop" eval '[[ "$(grep -c "no usable" <<< "$OUT")" == 1 && "$OUT" != *"(retry"* ]]'
+expect "  ... error stored without a retry time" grep -qx "NEXT=0" "$D/state/failure"
 
 echo "== guided setup"
 # run_setup INPUT_LINES...: answers the prompts in order (DDNS_SETUP_INPUT replaces the terminal)
