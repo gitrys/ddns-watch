@@ -262,7 +262,8 @@ rest_call() {
     fi
     if ! out=$(printf 'header = "Authorization: Bearer %s"\n' "$(curl_cfg_escape "$NETCUP_TOKEN")" \
             | curl "${args[@]}" "$NETCUP_REST_BASE$2" 2>&1); then
-        REST_ERR="$1 $2: $out"
+        # (Without an answer, -w still appends "\n000": drop it, it is no HTTP status.)
+        REST_ERR="$1 $2: ${out%$'\n'000}"
         return 1
     fi
     REST_HTTP="${out##*$'\n'}"

@@ -33,7 +33,8 @@ dyndns2_send() {
     code="${out##*$'\n'}"
     PROVIDER_RESPONSE="${out%$'\n'*}"
     PROVIDER_RESPONSE="${PROVIDER_RESPONSE%$'\r'}"
-    [[ "$code" =~ ^[0-9]{3}$ ]] || { PROVIDER_RESPONSE="no HTTP answer: $out"; return 1; }
+    # (Without an answer, -w still writes "000" as the status: that is no HTTP status.)
+    [[ "$code" =~ ^[0-9]{3}$ && "$code" != 000 ]] || { PROVIDER_RESPONSE="no HTTP answer: ${out%$'\n'000}"; return 1; }
     if [[ "$code" == 2* && "$PROVIDER_RESPONSE" =~ ^(good|nochg)([[:space:]]|$) ]]; then
         return 0
     fi

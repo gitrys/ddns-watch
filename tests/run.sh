@@ -256,7 +256,8 @@ EOF
 cat > "$SRC/ip" << 'EOF'
 #!/bin/bash
 # -6 addr: contents of $STUB_IP6_FILE. monitor: two events; before the second one the address
-# file is replaced by $STUB_IP6_FILE.next (the first event changes nothing we publish).
+# file is replaced by $STUB_IP6_FILE.next (the first event changes nothing we publish); then it
+# stays quiet for $STUB_MONITOR_TAIL seconds (default 1) and exits.
 # -br link: $STUB_LINKS. -6 route: $STUB_ROUTE6. -6 addr of a device: $STUB_IP6_FILE.<dev> if it
 # exists, else $STUB_IP6_FILE.
 case "$*" in
@@ -269,7 +270,7 @@ case "$*" in
     *monitor*)
         echo "event 1"; sleep 1
         [[ -f "${STUB_IP6_FILE:-}.next" ]] && cp "$STUB_IP6_FILE.next" "$STUB_IP6_FILE"
-        echo "event 2"; sleep 1 ;;
+        echo "event 2"; sleep "${STUB_MONITOR_TAIL:-1}" ;;
 esac
 exit 0
 EOF
@@ -396,6 +397,20 @@ JOURNAL_STREAM=1:1 run
 expect "  ... inherited JOURNAL_STREAM but stdout elsewhere -> no prefix" eval '[[ "$OUT" == unchanged* ]]'
 expect "  ... IPv4 unit keeps only notice and above" grep -qx "LogLevelMax=notice" "$ROOT/systemd/ddns-watch-ipv4.service"
 
+# Nothing listens on port 1: curl cannot connect (exit 7), as when the router is still booting.
+mock_reset; new_case netcup
+NETCUP_REST_BASE="http://127.0.0.1:1/v1" run
+expect "provider not reachable -> temporary, marked as such" has "(temporary, provider not reachable)"
+expect "  ... first retry after 10 s, not 1 min" eval '(( $(sed -n "s/^NEXT=//p" "$D/state/failure") - $(date +%s) <= 10 ))'
+expect "  ... no stray curl status line (000)" eval '! grep -qx "000" <<< "$OUT"'
+fail_set NEXT 0
+NETCUP_REST_BASE="http://127.0.0.1:1/v1" run
+expect "  ... backoff grows to 20 s" eval '(( $(sed -n "s/^NEXT=//p" "$D/state/failure") - $(date +%s) > 10 ))'
+mock_reset; new_case strato
+STRATO_URL="http://127.0.0.1:1/nic/update" run
+expect "dyndns2 not reachable: no '000' status in the message" eval 'has "no HTTP answer: curl: (7)" && ! grep -qx "000" <<< "$OUT"'
+expect "  ... provider not reachable" has "provider not reachable"
+
 echo "== test-notify, Gotify"
 mock_reset; new_case netcup
 run_store test-notify
@@ -490,6 +505,15 @@ run_v6 watch
 expect "watch: event without change -> no update run" eval '[[ "$(grep -c "address changed" <<< "$OUT")" == 1 ]]'
 expect "  ... prefix change -> update" zone_has @ AAAA '["2a03:4000:2::67c:16ff:fedf:a200"]'
 expect "  ... log line lists the address without a trailing blank" has "address changed (2a03:4000:2::67c:16ff:fedf:a200), running"
+# A failed update with its retry due in 2 s: the watcher retries on its own (no timer, no event).
+mock_reset; new_case netcup
+printf '%s\n' "$V6_ADDRS" > "$D/ip6"
+printf 'CLASS=temporary\nSINCE=%s\nCOUNT=1\nNEXT=%s\nMSG=test\nFPRINT=x\nNOTIFIED=0\n' \
+    "$(date +%s)" "$(( $(date +%s) + 2 ))" > "$D/state/failure"
+STUB_MONITOR_TAIL=5 run_v6 watch
+expect "watch: waits for a pending retry" has "waiting to retry"
+expect "  ... then retries by itself" eval 'has "(retry 2)" && has "good netcup-rest"'
+expect "  ... failure cleared" [ ! -e "$D/state/failure" ]
 
 echo "== guided setup"
 # run_setup INPUT_LINES...: answers the prompts in order (DDNS_SETUP_INPUT replaces the terminal)

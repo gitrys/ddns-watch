@@ -933,9 +933,18 @@ _update_once_locked() {
         return 0
     fi
     [[ "$PROVIDER_ERROR_CLASS" == permanent ]] || PROVIDER_ERROR_CLASS="temporary"
-    err "$PROVIDER update failed ($PROVIDER_ERROR_CLASS): $PROVIDER_RESPONSE"
-    record_failure "$PROVIDER_ERROR_CLASS" "$PROVIDER_RESPONSE" "$now" "$fprint"
+    local kind=""
+    [[ "$PROVIDER_ERROR_CLASS" == temporary ]] && is_network_error "$PROVIDER_RESPONSE" && kind=network
+    err "$PROVIDER update failed ($PROVIDER_ERROR_CLASS${kind:+, provider not reachable}): $PROVIDER_RESPONSE"
+    record_failure "$PROVIDER_ERROR_CLASS" "$PROVIDER_RESPONSE" "$now" "$fprint" "$kind"
     return 1
+}
+
+# is_network_error MESSAGE: curl could not resolve the name or connect at all (exit codes 5, 6, 7;
+# plugins pass curl's --show-error text on). Typical right after a power cut, while the router or
+# its DNS is still starting: worth retrying within seconds, not minutes.
+is_network_error() {
+    [[ "$1" =~ curl:\ \((5|6|7)\) ]]
 }
 
 # ---------------------------------------------------------------- failures, notifications, heartbeat
@@ -988,11 +997,13 @@ config_fingerprint() {
     } | sha256sum | cut -c1-16
 }
 
-# record_failure CLASS MESSAGE NOW FINGERPRINT [nowait]: remembers the error, sets the earliest time
-# for the next try (1, 2, 5, then every 10 min; "nowait": at once) and notifies (permanent: at once;
-# temporary: after NOTIFY_AFTER). The try itself happens at the next run (timer or address event).
+# record_failure CLASS MESSAGE NOW FINGERPRINT [nowait|network]: remembers the error, sets the
+# earliest time for the next try (1, 2, 5, then every 10 min; "network": 10, 20, 30 s, 1, 2, 5, then
+# every 10 min; "nowait": at once) and notifies (permanent: at once; temporary: after NOTIFY_AFTER).
+# The try itself happens at the next run (watcher retry, timer or address event).
 record_failure() {
     local delays=(60 120 300 600)
+    [[ "${5:-}" == network ]] && delays=(10 20 30 60 120 300 600)
     load_failure
     [[ "$FAIL_SINCE" -gt 0 ]] || FAIL_SINCE="$3"
     FAIL_CLASS="$1"
@@ -2049,54 +2060,84 @@ watch_loop() {
     # Config and secrets are re-read on every update, so they may change while we run.
     say "watch: starting (provider=$PROVIDER iface=$IFACE debounce=${DEBOUNCE_SEC}s)"
     [[ "$PROVIDER_LOCAL" -eq 1 ]] && warn "provider $PROVIDER is a local plugin from $LOCAL_PROVIDERS_DIR (not part of ddns-watch)"
-    update_once || true
     local fam=(-6) what=IPv6
     if [[ "$IPV4_SOURCE" == interface && "$RECORDS" != AAAA ]]; then
         fam=()
         what="IPv4 and IPv6"
     fi
-    [[ "$RECORDS" == A && "$IPV4_SOURCE" != interface ]] && say "watch: RECORDS=A without IPV4_SOURCE=interface: only the timer catches changes"
-    say "watch: monitoring $what on $IFACE"
 
     # The kernel reports every address event, including privacy-address renewals and lifetime
     # refreshes (every few minutes). Only run the updater when an address we publish changed.
     # Every WATCH_TICK seconds without an event, check whether settings that decide WHAT we watch
     # changed (IFACE, IPV4_SOURCE, RECORDS, IPV6_SUFFIX); if so, start over with the new config.
-    local seen now rc mon_pid watch_fp
+    # The monitor starts before the first update, and "seen" is taken before it too: an address
+    # that arrives while the first update runs (at boot, IPv6 often comes a few seconds after
+    # IPv4) is then noticed as a change instead of being taken as already published.
+    local seen now rc mon_pid watch_fp tmo wait pending=""
     seen=$(local_addresses)
     watch_fp=$(watch_fingerprint)
     # (8>&-: the monitor must not inherit the watcher lock, or a restarted watcher finds it taken.)
     exec 3< <(exec ip "${fam[@]}" monitor address dev "$IFACE" 8>&-)
     mon_pid=$!
+    update_once || true
+    [[ "$RECORDS" == A && "$IPV4_SOURCE" != interface ]] && say "watch: RECORDS=A without IPV4_SOURCE=interface: only the timer catches changes"
+    say "watch: monitoring $what on $IFACE"
+
     while true; do
-        if IFS= read -r -t "$WATCH_TICK" -u 3 _; then
+        # A failed update with a retry time ahead: wake up for it, so the retry does not wait for
+        # the timer (minutes) or an address event. ("nowait" errors have no time ahead: those are
+        # retried by address events and the timer, as before.)
+        tmo="$WATCH_TICK"
+        wait=$(watch_retry_wait)
+        if [[ -n "$wait" ]] && (( wait > 0 )); then
+            pending=1
+            [[ "$WATCH_TICK" =~ ^[0-9]+$ ]] && (( wait < WATCH_TICK )) && tmo="$wait"
+        fi
+        if IFS= read -r -t "$tmo" -u 3 _; then
             while IFS= read -r -t "$DEBOUNCE_SEC" -u 3 _; do
                 :
             done
             now=$(local_addresses)
-            [[ "$now" == "$seen" ]] && continue
-            say_notice "watch: address changed (${now//$'\n'/ }), running updater"
-            seen="$now"
-            update_once || true
-            continue
+            if [[ "$now" != "$seen" ]]; then
+                say_notice "watch: address changed (${now//$'\n'/ }), running updater"
+                seen="$now"
+                pending=""
+                update_once || true
+            fi
         else
             rc=$? # (here, not after "fi": after fi $? would be 0)
+            if (( rc <= 128 )); then
+                break # end of input: ip monitor exited
+            fi
+            now=$(watch_fingerprint)
+            # (Empty = config unreadable right now, e.g. while being saved: try again next tick.)
+            if [[ -n "$now" && "$now" != "$watch_fp" ]]; then
+                say "watch: configuration changed (interface, IPv4 source, records or IPv6 suffix): restarting the watcher"
+                kill "$mon_pid" 2>/dev/null
+                exec 3<&- 8>&-
+                exec "$SELF" watch
+            fi
         fi
-        if (( rc <= 128 )); then
-            break # end of input: ip monitor exited
-        fi
-        now=$(watch_fingerprint)
-        # (Empty = config unreadable right now, e.g. while being saved: try again next tick.)
-        if [[ -n "$now" && "$now" != "$watch_fp" ]]; then
-            say "watch: configuration changed (interface, IPv4 source, records or IPv6 suffix): restarting the watcher"
-            kill "$mon_pid" 2>/dev/null
-            exec 3<&- 8>&-
-            exec "$SELF" watch
+        if [[ -n "$pending" && "$(watch_retry_wait)" == 0 ]]; then
+            pending=""
+            update_once || true
         fi
     done
 
     err "watch: ip monitor exited"
     return 1
+}
+
+# watch_retry_wait: seconds until the retry of a temporary error is due (0 = due now); prints
+# nothing if no temporary error is pending.
+watch_retry_wait() {
+    (
+        load_failure
+        [[ "$FAIL_CLASS" == temporary ]] || exit 0
+        local now
+        now=$(date +%s)
+        if (( FAIL_NEXT > now )); then echo $((FAIL_NEXT - now)); else echo 0; fi
+    )
 }
 
 # The settings the watcher itself depends on. Empty if the config cannot be read right now.

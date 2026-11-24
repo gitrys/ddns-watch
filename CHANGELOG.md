@@ -3,6 +3,23 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Faster recovery after a power cut, found in live use: the first update at boot failed because the
+router's DNS was not up yet, and the retry then waited for the IPv4 timer (2 minutes after boot).
+
+### Changed
+- If the provider cannot be reached at all (curl cannot resolve the name or connect), the retry is
+  due after 10, 20, 30 seconds, 1, 2, 5, then every 10 minutes, instead of 1, 2, 5, 10 minutes. The
+  log line says "provider not reachable".
+- The watcher runs a due retry itself instead of waiting for the IPv4 timer or an address change.
+- The watcher starts watching addresses before its first update, so an address that arrives during
+  that update (at boot, IPv6 often comes a few seconds after IPv4) still triggers an update.
+
+### Fixed
+- netcup REST and dyndns2 providers: when the provider sent no answer, the log had an extra line
+  "000" (curl's placeholder status code).
+
 ## [1.8.0] - 2026-11-22
 
 The service tells you when a new release is out.

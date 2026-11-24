@@ -133,9 +133,12 @@ record that is no longer wanted by hand at your provider.
 
 - A **permanent** error (key rejected, unknown hostname) stops further tries until you change the
   config or the secret, and notifies at once.
-- A **temporary** error (provider down, no usable address) is retried. A retry is allowed after
-  1, 2, 5, then every 10 minutes; it runs at the next check after that: the IPv4 timer (every
-  minute with `upnp`, every 5 minutes otherwise) or an address change. Notification after
+- A **temporary** error (provider down, no usable address) is retried. A retry is due after
+  1, 2, 5, then every 10 minutes. If the provider cannot be reached at all (name not resolved, no
+  connection, e.g. while the router is still booting after a power cut), it is due after 10, 20,
+  30 seconds, 1, 2, 5, then every 10 minutes. The watcher runs a due retry itself; the IPv4 timer
+  (every minute with `upnp`, every 5 minutes otherwise) and address changes try too. Without a
+  usable address, the next timer run or address change tries again. Notification after
   `NOTIFY_AFTER` minutes (default 15), and again when it works.
 - Once a day the current addresses are sent even without a change (fixes records changed by hand).
 - **Notification** (`NOTIFY_URL`, optional): a message to your phone when updates keep failing,
