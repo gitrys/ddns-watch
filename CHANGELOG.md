@@ -3,7 +3,7 @@
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions: [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.9.0] - 2026-11-24
 
 Faster recovery after a power cut, found in live use: the first update at boot failed because the
 router's DNS was not up yet, and the retry then waited for the IPv4 timer (2 minutes after boot).
