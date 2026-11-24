@@ -17,7 +17,7 @@
 # Copyright (C) 2026 gitrys. SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
-VERSION="1.9.0-dev"   # set by the release workflow
+VERSION="1.10.0-dev"   # set by the release workflow
 REPO="gitrys/ddns-watch"
 RELEASE_BASE="${DDNS_RELEASE_BASE:-https://github.com/$REPO/releases/download}"
 PREFIX="${DDNS_PREFIX:-/usr/local}"
